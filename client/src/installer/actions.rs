@@ -501,7 +501,7 @@ pub fn register_in_windows_uninstall(target_dir: &Path, target_exe: &Path) -> Re
              'Remove-Item -Path ''HKCU:\\Software\\CoopLink'' -Recurse -Force -ErrorAction SilentlyContinue; ' + \
              'foreach ($d in @(''{1}'',''{2}'',''{3}'')) {{ ' + \
                  'if ($d -and (Test-Path $d)) {{ ' + \
-                     'Get-ChildItem -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; ' + \
+                     'Remove-Item -Path (Join-Path $d ''*'') -Recurse -Force -ErrorAction SilentlyContinue; ' + \
                      'Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue ' + \
                  '}} ' + \
              '}}; ' + \
