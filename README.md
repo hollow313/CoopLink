@@ -61,9 +61,9 @@ CoopLink/
 Le serveur centralise la signalisation, l'attribution des identifiants uniques (`ClientID`), la traversée de NAT (UDP hole punching) et le relais de secours.
 
 ### Caractéristiques du Container :
-- **Port Unique Exposé `30024`** :
-  - `30024/udp` : Tunnel gaming, attribution des `ClientID`, coordination et paquets de découverte.
-  - `30024/tcp` : Dashboard Web d'administration et monitoring en direct.
+- **Ports Exposés** :
+  - `30024/udp` : Tunnel gaming, attribution des `ClientID`, coordination et paquets de découverte LAN.
+  - `30025/tcp` : Dashboard Web d'administration et monitoring en direct.
 - **Utilisateur de sécurité** : Exécuté sous l'UID/GID **`568:568`** (non-root sécurisé).
 - **Volume persistant à binder** : **`/data`** (stocke la configuration `server_config.json`, les données et l'historique).
 - **Build automatique GitHub Actions** : Déclenché à chaque push sur `main`, compile sur Alpine Linux et publie l'image sur GitHub Packages (`ghcr.io/hollow313/cooplink-server:latest`).
@@ -78,12 +78,11 @@ services:
     restart: unless-stopped
     user: "568:568"
     ports:
-      # Port unique 30024 exposé pour le tunnel UDP et le dashboard Web TCP
-      - "30024:30024/udp"
-      - "30024:30024/tcp"
+      - "30024:30024/udp"   # Coordination & tunnel UDP
+      - "30025:30025/tcp"   # Dashboard Web d'administration
     environment:
       - PORT_UDP=30024
-      - PORT_WEB=30024
+      - PORT_WEB=30025
       - DATA_DIR=/data
       - SERVER_NAME=CoopLink Official Master Hub
     volumes:
@@ -96,7 +95,7 @@ docker compose up -d
 ```
 
 ### 🌐 Dashboard Web d'Administration
-Ouvrez simplement votre navigateur sur `http://<IP-SERVEUR>:30024` :
+Ouvrez simplement votre navigateur sur `http://<IP-SERVEUR>:30025` :
 - Vue d'ensemble des **Salons Actifs** et du nombre de joueurs par salon.
 - Liste complète de **tous les Clients Connectés avec leur ClientID unique** (ex: `#1001`, `#1002`...), leur IP virtuelle, leur endpoint public et leur latence (Ping).
 - Statistiques de débit réseau (Mo relayés en direct).

@@ -11,15 +11,27 @@ use eframe::egui;
 use wizard::InstallerApp;
 
 fn main() -> eframe::Result<()> {
+    let mut vp = egui::ViewportBuilder::default()
+        .with_title("Installation de CoopLink v1.0.0")
+        .with_inner_size([640.0, 480.0])
+        .with_min_inner_size([640.0, 480.0])
+        .with_resizable(false)
+        .with_maximize_button(false)
+        .with_active(true)
+        .with_decorations(true);
+
+    if let Ok(img) = image::load_from_memory(include_bytes!("../../../images/logo.jpg")) {
+        let rgba = img.into_rgba8();
+        let (width, height) = rgba.dimensions();
+        vp = vp.with_icon(egui::IconData {
+            rgba: rgba.into_raw(),
+            width,
+            height,
+        });
+    }
+
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Installation de CoopLink v1.0.0")
-            .with_inner_size([640.0, 480.0])
-            .with_min_inner_size([640.0, 480.0])
-            .with_resizable(false)
-            .with_maximize_button(false)
-            .with_active(true)
-            .with_decorations(true),
+        viewport: vp,
         ..Default::default()
     };
 

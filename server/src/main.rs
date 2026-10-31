@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
     let hub = Arc::new(ServerHub::new(config.udp_port));
     hub.clone().start().await?;
 
-    // Lancement du Serveur Web d'Administration (port 8080 par défaut)
+    // Lancement du Serveur Web d'Administration (port 30025 par défaut)
     let hub_for_web = hub.clone();
     let config_for_web = config.clone();
     tokio::spawn(async move {

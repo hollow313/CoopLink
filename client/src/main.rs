@@ -71,14 +71,26 @@ fn main() -> eframe::Result<()> {
     }
 
     // Lancement de l'interface graphique Rétro Gaming (eframe / egui)
+    let mut vp = egui::ViewportBuilder::default()
+        .with_title("CoopLink // Virtual LAN Gaming Engine")
+        .with_inner_size([980.0, 680.0])
+        .with_min_inner_size([800.0, 560.0])
+        .with_active(true)
+        .with_decorations(true)
+        .with_resizable(true);
+
+    if let Ok(img) = image::load_from_memory(include_bytes!("../images/logo.jpg")) {
+        let rgba = img.into_rgba8();
+        let (width, height) = rgba.dimensions();
+        vp = vp.with_icon(egui::IconData {
+            rgba: rgba.into_raw(),
+            width,
+            height,
+        });
+    }
+
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("CoopLink // Virtual LAN Gaming Engine")
-            .with_inner_size([980.0, 680.0])
-            .with_min_inner_size([800.0, 560.0])
-            .with_active(true)
-            .with_decorations(true)
-            .with_resizable(true),
+        viewport: vp,
         ..Default::default()
     };
 

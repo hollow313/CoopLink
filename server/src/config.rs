@@ -18,7 +18,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             udp_port: 30024,
-            web_port: 30024, // Port unifié 30024 pour TCP (Web) et UDP (Tunnel)
+            web_port: 30025, // Port 30025 pour l'administration Web TCP
             data_dir: "/data".to_string(),
             server_name: "CoopLink Central Server #1".to_string(),
             admin_password: "admin".to_string(),
