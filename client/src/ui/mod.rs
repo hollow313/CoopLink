@@ -58,6 +58,7 @@ pub struct CoopLinkApp {
     pub telemetry: Arc<CentralTelemetryClient>,
     pub streaming_engine: StreamingEngine,
     pub speedtest_mgr: SpeedtestManager,
+    pub adapter: NativeAdapter,
     pub to_adapter_tx: mpsc::Sender<Vec<u8>>,
     pub from_net_rx: Option<mpsc::Receiver<Vec<u8>>>,
     pub to_bcast_tx: mpsc::Sender<(u16, Vec<u8>)>,
@@ -76,7 +77,7 @@ impl CoopLinkApp {
         let config = AppConfig::load();
         let mut state = AppState::default();
 
-        let (_adapter, to_adapter_tx, from_net_rx) = NativeAdapter::new();
+        let (adapter, to_adapter_tx, from_net_rx) = NativeAdapter::new();
         let (to_bcast_tx, from_bcast_rx) = mpsc::channel(1000);
         let (to_tunnel_bcast_tx, from_tunnel_bcast_rx) = mpsc::channel(1000);
 
@@ -119,6 +120,7 @@ impl CoopLinkApp {
             telemetry,
             streaming_engine,
             speedtest_mgr,
+            adapter,
             to_adapter_tx,
             from_net_rx: Some(from_net_rx),
             to_bcast_tx,
@@ -598,7 +600,7 @@ impl eframe::App for CoopLinkApp {
                         SettingsView::render(ui, &mut self.config, &mut self.saved_notice);
                     }
                     ActiveTab::Console => {
-                        ConsoleView::render(ui, &self.logs, &mut on_clear_console_clicked);
+                        ConsoleView::render(ui, lang, &self.logs, &mut on_clear_console_clicked);
                     }
                 }
 
@@ -704,7 +706,7 @@ impl eframe::App for CoopLinkApp {
                 }
             });
 
-        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
 }
 
@@ -714,7 +716,12 @@ impl CoopLinkApp {
         self.state.role = NodeRole::Host;
         let port = self.config.listen_port;
         let player_name = self.config.player_name.clone();
-        let room_code = self.state.room_code.clone();
+        let room_code = self.state.room_code.trim().to_string();
+        let auth_token = if self.config.room_password.trim().is_empty() {
+            room_code.clone()
+        } else {
+            format!("{}#{}", room_code, self.config.room_password.trim())
+        };
         let host_ip = self.config.host_virtual_ip;
 
         self.add_log(
@@ -722,27 +729,28 @@ impl CoopLinkApp {
             &format!("Création du salon '{}' (Port UDP P2P {})...", room_code, port),
         );
 
-        let tunnel = self.tunnel.clone();
-        let to_adapter = self.to_adapter_tx.clone();
-        let from_adapter = self.from_net_rx.take().unwrap_or_else(|| mpsc::channel(1000).1);
-        let to_bcast = self.to_bcast_tx.clone();
-        let from_bcast = self.from_tunnel_bcast_rx.take().unwrap_or_else(|| mpsc::channel(1000).1);
+        let (adapter, to_adapter_tx, from_adapter) = NativeAdapter::new();
+        let (to_bcast_tx, from_bcast_net) = mpsc::channel(1000);
+        let (to_tunnel_bcast_tx, from_bcast) = mpsc::channel(1000);
+        self.adapter = adapter;
+        self.to_adapter_tx = to_adapter_tx.clone();
+        self.to_bcast_tx = to_bcast_tx.clone();
+        self.to_tunnel_bcast_tx = to_tunnel_bcast_tx.clone();
 
+        let tunnel = self.tunnel.clone();
         let bcast_relay = self.broadcast_relay.clone();
-        let to_tunnel_bcast = self.to_tunnel_bcast_tx.clone();
-        let from_bcast_net = self.from_bcast_rx.take().unwrap_or_else(|| mpsc::channel(1000).1);
 
         self.rt.spawn(async move {
-            let _ = bcast_relay.start(host_ip, to_tunnel_bcast, from_bcast_net).await;
+            let _ = bcast_relay.start(host_ip, to_tunnel_bcast_tx, from_bcast_net).await;
             if let Err(e) = tunnel
                 .start_host(
                     port,
                     player_name,
-                    room_code,
+                    auth_token,
                     host_ip,
-                    to_adapter,
+                    to_adapter_tx,
                     from_adapter,
-                    to_bcast,
+                    to_bcast_tx,
                     from_bcast,
                 )
                 .await
@@ -751,15 +759,12 @@ impl CoopLinkApp {
             }
         });
 
-        let app_target = self.streaming_engine.selected_app_name.clone();
-        let _ = self.streaming_engine.capture_host.start_daemon(host_ip, &app_target);
-
         self.apply_low_metric();
         self.sync_telemetry();
         self.add_log(
             LogLevel::Success,
             &format!(
-                "Salon hébergé actif sur {} (Prêt pour les jeux LAN et le partage de jeu Co-op).",
+                "Salon hébergé actif sur {} (0% charge CPU en veille — prêt pour les jeux LAN et le partage de jeu Co-op).",
                 host_ip
             ),
         );
@@ -792,34 +797,40 @@ impl CoopLinkApp {
         self.state.status = ConnectionStatus::Connecting;
         self.state.role = NodeRole::Client;
         let player_name = self.config.player_name.clone();
-        let room_code = self.state.room_code.clone();
+        let room_code = self.state.room_code.trim().to_string();
+        let auth_token = if self.config.room_password.trim().is_empty() {
+            room_code.clone()
+        } else {
+            format!("{}#{}", room_code, self.config.room_password.trim())
+        };
 
         self.add_log(
             LogLevel::Info,
             &format!("Connexion P2P au salon '{}' ({})...", room_code, server_addr),
         );
 
-        let tunnel = self.tunnel.clone();
-        let to_adapter = self.to_adapter_tx.clone();
-        let from_adapter = self.from_net_rx.take().unwrap_or_else(|| mpsc::channel(1000).1);
-        let to_bcast = self.to_bcast_tx.clone();
-        let from_bcast = self.from_tunnel_bcast_rx.take().unwrap_or_else(|| mpsc::channel(1000).1);
+        let (adapter, to_adapter_tx, from_adapter) = NativeAdapter::new();
+        let (to_bcast_tx, from_bcast_net) = mpsc::channel(1000);
+        let (to_tunnel_bcast_tx, from_bcast) = mpsc::channel(1000);
+        self.adapter = adapter;
+        self.to_adapter_tx = to_adapter_tx.clone();
+        self.to_bcast_tx = to_bcast_tx.clone();
+        self.to_tunnel_bcast_tx = to_tunnel_bcast_tx.clone();
 
+        let tunnel = self.tunnel.clone();
         let bcast_relay = self.broadcast_relay.clone();
-        let to_tunnel_bcast = self.to_tunnel_bcast_tx.clone();
-        let from_bcast_net = self.from_bcast_rx.take().unwrap_or_else(|| mpsc::channel(1000).1);
 
         self.rt.spawn(async move {
             let dummy_vip = Ipv4Addr::new(10, 244, 0, 99);
-            let _ = bcast_relay.start(dummy_vip, to_tunnel_bcast, from_bcast_net).await;
+            let _ = bcast_relay.start(dummy_vip, to_tunnel_bcast_tx, from_bcast_net).await;
             if let Err(e) = tunnel
                 .start_client(
                     server_addr,
                     player_name,
-                    room_code,
-                    to_adapter,
+                    auth_token,
+                    to_adapter_tx,
                     from_adapter,
-                    to_bcast,
+                    to_bcast_tx,
                     from_bcast,
                 )
                 .await

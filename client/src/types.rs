@@ -78,10 +78,11 @@ pub struct AppState {
 
 impl Default for AppState {
     fn default() -> Self {
+        let code_num = rand::random::<u16>() % 9000 + 1000;
         Self {
             status: ConnectionStatus::Disconnected,
             role: NodeRole::Idle,
-            room_code: "COOP-7701".to_string(),
+            room_code: format!("COOP-{}", code_num),
             virtual_ip: None,
             peers: Vec::new(),
             interface_metric: 5,

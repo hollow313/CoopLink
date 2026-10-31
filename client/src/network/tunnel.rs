@@ -252,6 +252,7 @@ impl NetworkTunnel {
                     }
                     Err(e) => {
                         debug!("Erreur de lecture socket: {}", e);
+                        tokio::time::sleep(Duration::from_millis(50)).await;
                     }
                 }
             }
@@ -309,6 +310,8 @@ impl NetworkTunnel {
                             }
                         }
                     }
+                } else {
+                    break;
                 }
             }
         });
@@ -338,6 +341,8 @@ impl NetworkTunnel {
                     for ep in client_eps {
                         let _ = socket_bcast.send_to(&pkt, ep).await;
                     }
+                } else {
+                    break;
                 }
             }
         });
@@ -481,6 +486,7 @@ impl NetworkTunnel {
                     }
                     Err(e) => {
                         debug!("Erreur de lecture client: {}", e);
+                        tokio::time::sleep(Duration::from_millis(50)).await;
                     }
                 }
             }
@@ -510,6 +516,8 @@ impl NetworkTunnel {
                         .encode();
                         let _ = socket_fwd.send_to(&pkt, server_addr).await;
                     }
+                } else {
+                    break;
                 }
             }
         });
@@ -532,6 +540,8 @@ impl NetworkTunnel {
                         .encode();
                         let _ = socket_bcast.send_to(&pkt, server_addr).await;
                     }
+                } else {
+                    break;
                 }
             }
         });

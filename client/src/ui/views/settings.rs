@@ -96,7 +96,17 @@ impl SettingsView {
                                 ui.text_edit_singleline(&mut config.central_server_address);
                                 ui.end_row();
 
-                                ui.label(RichText::new("Port UDP P2P :").color(ModernTheme::TEXT_PRIMARY).strong());
+                                ui.label(
+                                    RichText::new(match lang {
+                                        Language::Fr => "Port UDP P2P :",
+                                        Language::En => "P2P UDP Port:",
+                                        Language::Es => "Puerto UDP P2P:",
+                                        Language::De => "P2P UDP-Port:",
+                                        Language::Pt => "Porta UDP P2P:",
+                                    })
+                                    .color(ModernTheme::TEXT_PRIMARY)
+                                    .strong(),
+                                );
                                 let mut port_str = config.listen_port.to_string();
                                 if ui.text_edit_singleline(&mut port_str).changed() {
                                     if let Ok(val) = port_str.parse::<u16>() {
@@ -105,11 +115,31 @@ impl SettingsView {
                                 }
                                 ui.end_row();
 
-                                ui.label(RichText::new("Sous-réseau virtuel :").color(ModernTheme::TEXT_PRIMARY).strong());
+                                ui.label(
+                                    RichText::new(match lang {
+                                        Language::Fr => "Sous-réseau virtuel :",
+                                        Language::En => "Virtual Subnet:",
+                                        Language::Es => "Subred virtual:",
+                                        Language::De => "Virtuelles Subnetz:",
+                                        Language::Pt => "Sub-rede virtual:",
+                                    })
+                                    .color(ModernTheme::TEXT_PRIMARY)
+                                    .strong(),
+                                );
                                 ui.text_edit_singleline(&mut config.virtual_subnet_prefix);
                                 ui.end_row();
 
-                                ui.label(RichText::new("Taille MTU :").color(ModernTheme::TEXT_PRIMARY).strong());
+                                ui.label(
+                                    RichText::new(match lang {
+                                        Language::Fr => "Taille MTU :",
+                                        Language::En => "MTU Size:",
+                                        Language::Es => "Tamaño MTU:",
+                                        Language::De => "MTU-Größe:",
+                                        Language::Pt => "Tamanho MTU:",
+                                    })
+                                    .color(ModernTheme::TEXT_PRIMARY)
+                                    .strong(),
+                                );
                                 let mut mtu_str = config.mtu.to_string();
                                 if ui.text_edit_singleline(&mut mtu_str).changed() {
                                     if let Ok(val) = mtu_str.parse::<u32>() {

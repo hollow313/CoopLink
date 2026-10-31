@@ -177,34 +177,82 @@ fn render_connection_dashboard(
         .inner_margin(14.0)
         .rounding(Rounding::same(10.0))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(
                     RichText::new(match lang {
                         Language::Fr => "Votre pseudo :",
-                        Language::En => "Your nickname:",
-                        Language::Es => "Tu apodo:",
+                        Language::En => "Your Nickname:",
+                        Language::Es => "Tu Apodo:",
                         Language::De => "Dein Spielername:",
-                        Language::Pt => "O seu nome:",
+                        Language::Pt => "O seu Nome:",
                     })
                     .color(ModernTheme::TEXT_PRIMARY)
                     .strong(),
                 );
-                ui.add(egui::TextEdit::singleline(&mut config.player_name).desired_width(160.0));
+                ui.add(egui::TextEdit::singleline(&mut config.player_name).desired_width(135.0));
 
-                ui.add_space(24.0);
+                ui.add_space(16.0);
                 ui.label(
                     RichText::new(match lang {
-                        Language::Fr => "Code du salon :",
-                        Language::En => "Room Code:",
-                        Language::Es => "Código de sala:",
-                        Language::De => "Raumcode:",
-                        Language::Pt => "Código da sala:",
+                        Language::Fr => "Code du salon (Clé de session) :",
+                        Language::En => "Room Code (Session Key):",
+                        Language::Es => "Código de Sala (Clave):",
+                        Language::De => "Raumcode (Sitzungsschlüssel):",
+                        Language::Pt => "Código da Sala (Chave):",
                     })
                     .color(ModernTheme::TEXT_PRIMARY)
                     .strong(),
                 );
-                ui.add(egui::TextEdit::singleline(&mut state.room_code).desired_width(130.0));
+                ui.add(egui::TextEdit::singleline(&mut state.room_code).desired_width(105.0));
+                if ui
+                    .button(match lang {
+                        Language::Fr => "Nouveau code",
+                        Language::En => "New Code",
+                        Language::Es => "Nuevo código",
+                        Language::De => "Neuer Code",
+                        Language::Pt => "Novo código",
+                    })
+                    .clicked()
+                {
+                    let code_num = rand::random::<u16>() % 9000 + 1000;
+                    state.room_code = format!("COOP-{}", code_num);
+                }
+
+                ui.add_space(16.0);
+                ui.label(
+                    RichText::new(match lang {
+                        Language::Fr => "Mot de passe (Optionnel) :",
+                        Language::En => "Room Password (Optional):",
+                        Language::Es => "Contraseña (Opcional):",
+                        Language::De => "Passwort (Optional):",
+                        Language::Pt => "Palavra-passe (Opcional):",
+                    })
+                    .color(ModernTheme::TEXT_PRIMARY)
+                    .strong(),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut config.room_password)
+                        .password(true)
+                        .hint_text(match lang {
+                            Language::Fr => "Aucun ou secret...",
+                            Language::En => "None or secret...",
+                            _ => "...",
+                        })
+                        .desired_width(130.0),
+                );
             });
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(match lang {
+                    Language::Fr => "Sécurité d'accès : un joueur ne peut pas rejoindre uniquement avec l'IP/Port. Il doit obligatoirement connaître le Code du salon (généré aléatoirement à chaque session) ainsi que le Mot de passe si vous en définissez un.",
+                    Language::En => "Access Security: Nobody can join using only your IP/Port. Guests must enter the exact Room Code (randomly generated every session) plus the Room Password if you set one.",
+                    Language::Es => "Seguridad de acceso: Nadie puede unirse solo con la IP/Puerto. Se requiere el Código de Sala (generado en cada sesión) y la Contraseña si defines una.",
+                    Language::De => "Zugangssicherheit: Niemand kann nur mit IP/Port beitreten. Gäste benötigen den exakten Raumcode (jede Sitzung neu generiert) sowie das optionale Passwort.",
+                    Language::Pt => "Segurança de acesso: Ninguém pode entrar apenas com o IP/Porta. É obrigatório o Código da Sala (gerado em cada sessão) e a Palavra-passe se definir uma.",
+                })
+                .color(ModernTheme::TEXT_MUTED)
+                .size(12.0),
+            );
         });
 
     ui.add_space(12.0);
@@ -397,18 +445,58 @@ fn render_active_session(
                 ui.label(RichText::new(role_text).color(dot_col).strong());
 
                 ui.add_space(16.0);
-                ui.label(RichText::new("Salon :").color(ModernTheme::TEXT_SECONDARY));
+                ui.label(
+                    RichText::new(match lang {
+                        Language::Fr => "Salon :",
+                        Language::En => "Room:",
+                        Language::Es => "Sala:",
+                        Language::De => "Raum:",
+                        Language::Pt => "Sala:",
+                    })
+                    .color(ModernTheme::TEXT_SECONDARY),
+                );
                 ui.label(RichText::new(&state.room_code).color(ModernTheme::TEXT_PRIMARY).strong());
+                if !config.room_password.trim().is_empty() {
+                    ui.label(
+                        RichText::new(match lang {
+                            Language::Fr => "(Protégé par mot de passe)",
+                            Language::En => "(Password Protected)",
+                            Language::Es => "(Con contraseña)",
+                            Language::De => "(Passwortgeschützt)",
+                            Language::Pt => "(Com palavra-passe)",
+                        })
+                        .color(ModernTheme::GREEN_VIVID)
+                        .small(),
+                    );
+                }
 
                 if let Some(vip) = state.virtual_ip {
                     ui.add_space(16.0);
-                    ui.label(RichText::new("IP Virtuelle :").color(ModernTheme::TEXT_SECONDARY));
+                    ui.label(
+                        RichText::new(match lang {
+                            Language::Fr => "IP Virtuelle :",
+                            Language::En => "Virtual IP:",
+                            Language::Es => "IP Virtual:",
+                            Language::De => "Virtuelle IP:",
+                            Language::Pt => "IP Virtual:",
+                        })
+                        .color(ModernTheme::TEXT_SECONDARY),
+                    );
                     ui.label(
                         RichText::new(format!("{}", vip))
                             .color(ModernTheme::BLUE_ELECTRIC)
                             .strong(),
                     );
-                    if ui.button("Copier").clicked() {
+                    if ui
+                        .button(match lang {
+                            Language::Fr => "Copier",
+                            Language::En => "Copy",
+                            Language::Es => "Copiar",
+                            Language::De => "Kopieren",
+                            Language::Pt => "Copiar",
+                        })
+                        .clicked()
+                    {
                         ui.output_mut(|o| o.copied_text = vip.to_string());
                     }
                 }
@@ -475,8 +563,14 @@ fn render_active_session(
                                 }
                             } else {
                                 ui.label(
-                                    RichText::new("Ouverture UPnP automatique...")
-                                        .color(ModernTheme::ORANGE_CORAL),
+                                    RichText::new(match lang {
+                                        Language::Fr => "Ouverture UPnP automatique...",
+                                        Language::En => "Automatic UPnP port mapping...",
+                                        Language::Es => "Apertura UPnP automática...",
+                                        Language::De => "Automatische UPnP-Portfreigabe...",
+                                        Language::Pt => "Abertura UPnP automática...",
+                                    })
+                                    .color(ModernTheme::ORANGE_CORAL),
                                 );
                             }
 
@@ -546,20 +640,94 @@ fn render_peers_scoreboard(ui: &mut Ui, lang: Language, state: &AppState) {
                     .spacing([28.0, 8.0])
                     .striped(true)
                     .show(ui, |ui| {
-                        ui.label(RichText::new("JOUEUR").color(ModernTheme::BLUE_ELECTRIC).strong());
-                        ui.label(RichText::new("RÔLE").color(ModernTheme::BLUE_ELECTRIC).strong());
-                        ui.label(RichText::new("IP VIRTUELLE").color(ModernTheme::BLUE_ELECTRIC).strong());
-                        ui.label(RichText::new("LATENCE P2P").color(ModernTheme::BLUE_ELECTRIC).strong());
-                        ui.label(RichText::new("ACTION").color(ModernTheme::BLUE_ELECTRIC).strong());
+                        ui.label(
+                            RichText::new(match lang {
+                                Language::Fr => "JOUEUR",
+                                Language::En => "PLAYER",
+                                Language::Es => "JUGADOR",
+                                Language::De => "SPIELER",
+                                Language::Pt => "JOGADOR",
+                            })
+                            .color(ModernTheme::BLUE_ELECTRIC)
+                            .strong(),
+                        );
+                        ui.label(
+                            RichText::new(match lang {
+                                Language::Fr => "RÔLE",
+                                Language::En => "ROLE",
+                                Language::Es => "ROL",
+                                Language::De => "ROLLE",
+                                Language::Pt => "FUNÇÃO",
+                            })
+                            .color(ModernTheme::BLUE_ELECTRIC)
+                            .strong(),
+                        );
+                        ui.label(
+                            RichText::new(match lang {
+                                Language::Fr => "IP VIRTUELLE",
+                                Language::En => "VIRTUAL IP",
+                                Language::Es => "IP VIRTUAL",
+                                Language::De => "VIRTUELLE IP",
+                                Language::Pt => "IP VIRTUAL",
+                            })
+                            .color(ModernTheme::BLUE_ELECTRIC)
+                            .strong(),
+                        );
+                        ui.label(
+                            RichText::new(match lang {
+                                Language::Fr => "LATENCE P2P",
+                                Language::En => "P2P PING",
+                                Language::Es => "LATENCIA P2P",
+                                Language::De => "P2P-PING",
+                                Language::Pt => "LATÊNCIA P2P",
+                            })
+                            .color(ModernTheme::BLUE_ELECTRIC)
+                            .strong(),
+                        );
+                        ui.label(
+                            RichText::new(match lang {
+                                Language::Fr => "ACTION",
+                                Language::En => "ACTION",
+                                Language::Es => "ACCIÓN",
+                                Language::De => "AKTION",
+                                Language::Pt => "AÇÃO",
+                            })
+                            .color(ModernTheme::BLUE_ELECTRIC)
+                            .strong(),
+                        );
                         ui.end_row();
 
                         for peer in &state.peers {
-                            ui.label(RichText::new(&peer.name).color(ModernTheme::TEXT_PRIMARY).strong());
+                            let display_name = if lang != Language::Fr {
+                                peer.name.replace(" (Hôte)", " (Host)")
+                            } else {
+                                peer.name.clone()
+                            };
+                            ui.label(RichText::new(display_name).color(ModernTheme::TEXT_PRIMARY).strong());
 
                             if peer.is_host {
-                                ui.label(RichText::new("Hôte").color(ModernTheme::GREEN_VIVID).strong());
+                                ui.label(
+                                    RichText::new(match lang {
+                                        Language::Fr => "Hôte",
+                                        Language::En => "Host",
+                                        Language::Es => "Anfitrión",
+                                        Language::De => "Host",
+                                        Language::Pt => "Anfitrião",
+                                    })
+                                    .color(ModernTheme::GREEN_VIVID)
+                                    .strong(),
+                                );
                             } else {
-                                ui.label(RichText::new("Invité").color(ModernTheme::BLUE_ELECTRIC));
+                                ui.label(
+                                    RichText::new(match lang {
+                                        Language::Fr => "Invité",
+                                        Language::En => "Guest",
+                                        Language::Es => "Invitado",
+                                        Language::De => "Gast",
+                                        Language::Pt => "Convidado",
+                                    })
+                                    .color(ModernTheme::BLUE_ELECTRIC),
+                                );
                             }
 
                             ui.label(
@@ -576,7 +744,16 @@ fn render_peers_scoreboard(ui: &mut Ui, lang: Language, state: &AppState) {
                             };
                             ui.label(RichText::new(format!("{} ms", peer.ping_ms)).color(color).strong());
 
-                            if ui.button("Copier IP").clicked() {
+                            if ui
+                                .button(match lang {
+                                    Language::Fr => "Copier IP",
+                                    Language::En => "Copy IP",
+                                    Language::Es => "Copiar IP",
+                                    Language::De => "IP kopieren",
+                                    Language::Pt => "Copiar IP",
+                                })
+                                .clicked()
+                            {
                                 ui.output_mut(|o| o.copied_text = peer.virtual_ip.to_string());
                             }
                             ui.end_row();

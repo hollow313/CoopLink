@@ -16,8 +16,6 @@ pub const GAMING_BROADCAST_PORTS: &[u16] = &[
     25565, // Minecraft Java LAN discovery
     11155, // Terraria LAN
     3724,  // World of Warcraft / Blizzard
-    1900,  // SSDP LAN Discovery
-    5353,  // mDNS LAN
 ];
 
 pub struct BroadcastRelay {
@@ -77,6 +75,8 @@ impl BroadcastRelay {
                     if let Err(e) = tokio_socket.send_to(&payload, target_addr).await {
                         debug!("Erreur d'envoi du broadcast gaming vers {}: {}", target_addr, e);
                     }
+                } else {
+                    break;
                 }
             }
         });
@@ -92,15 +92,20 @@ impl BroadcastRelay {
                     if let Ok(async_sock) = UdpSocket::from_std(std_sock.into()) {
                         let mut buf = vec![0u8; 4096];
                         while running_port.load(Ordering::Relaxed) {
-                            if let Ok((len, src)) = async_sock.recv_from(&mut buf).await {
-                                // Ignore les paquets provenant de notre propre IP virtuelle pour éviter les boucles
-                                if let SocketAddr::V4(v4) = src {
-                                    if *v4.ip() == virtual_ip {
-                                        continue;
+                            match async_sock.recv_from(&mut buf).await {
+                                Ok((len, src)) => {
+                                    // Ignore les paquets provenant de notre propre IP virtuelle pour éviter les boucles
+                                    if let SocketAddr::V4(v4) = src {
+                                        if *v4.ip() == virtual_ip {
+                                            continue;
+                                        }
                                     }
+                                    counter_clone.fetch_add(1, Ordering::Relaxed);
+                                    let _ = tx_clone.send((port, buf[..len].to_vec())).await;
                                 }
-                                counter_clone.fetch_add(1, Ordering::Relaxed);
-                                let _ = tx_clone.send((port, buf[..len].to_vec())).await;
+                                Err(_) => {
+                                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                                }
                             }
                         }
                     }

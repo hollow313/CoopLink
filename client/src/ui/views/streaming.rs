@@ -562,13 +562,49 @@ impl StreamingView {
                                 .size(16.0),
                             );
                         });
+                        let app_disp = if lang != Language::Fr && engine.selected_app_name.starts_with("Jeu actif") {
+                            match lang {
+                                Language::En => "Active Foreground Game (Auto DirectX / Vulkan Detection)",
+                                Language::Es => "Juego activo en primer plano (Auto DirectX / Vulkan)",
+                                Language::De => "Aktives Vordergrundspiel (Auto DirectX / Vulkan)",
+                                Language::Pt => "Jogo ativo em primeiro plano (Auto DirectX / Vulkan)",
+                                Language::Fr => &engine.selected_app_name,
+                            }
+                        } else {
+                            &engine.selected_app_name
+                        };
+                        let enc_disp = if lang != Language::Fr {
+                            engine
+                                .capture_host
+                                .active_encoder
+                                .short_badge()
+                                .replace("Matériel GPU", "Hardware GPU")
+                        } else {
+                            engine.capture_host.active_encoder.short_badge().to_string()
+                        };
                         ui.label(
-                            RichText::new(format!(
-                                "Jeu : {}  |  Encodeur : {} ({})",
-                                engine.selected_app_name,
-                                engine.capture_host.active_encoder.short_badge(),
-                                engine.capture_host.detected_gpu_name
-                            ))
+                            RichText::new(match lang {
+                                Language::Fr => format!(
+                                    "Jeu : {}  |  Encodeur : {} ({})",
+                                    app_disp, enc_disp, engine.capture_host.detected_gpu_name
+                                ),
+                                Language::En => format!(
+                                    "Game: {}  |  Encoder: {} ({})",
+                                    app_disp, enc_disp, engine.capture_host.detected_gpu_name
+                                ),
+                                Language::Es => format!(
+                                    "Juego: {}  |  Codificador: {} ({})",
+                                    app_disp, enc_disp, engine.capture_host.detected_gpu_name
+                                ),
+                                Language::De => format!(
+                                    "Spiel: {}  |  Encoder: {} ({})",
+                                    app_disp, enc_disp, engine.capture_host.detected_gpu_name
+                                ),
+                                Language::Pt => format!(
+                                    "Jogo: {}  |  Codificador: {} ({})",
+                                    app_disp, enc_disp, engine.capture_host.detected_gpu_name
+                                ),
+                            })
                             .color(ModernTheme::TEXT_SECONDARY)
                             .size(12.5),
                         );
@@ -638,6 +674,13 @@ impl StreamingView {
                 ui.add_space(6.0);
 
                 ui.columns(4, |cols| {
+                    let player_word = match lang {
+                        Language::Fr => "Joueur",
+                        Language::En => "Player",
+                        Language::Es => "Jugador",
+                        Language::De => "Spieler",
+                        Language::Pt => "Jogador",
+                    };
                     for slot_num in 1..=4 {
                         let existing = engine
                             .capture_host
@@ -651,15 +694,26 @@ impl StreamingView {
                             } else {
                                 ModernTheme::GREEN_VIVID
                             };
+                            let owner_lbl = if s.is_local_host {
+                                match lang {
+                                    Language::Fr => "Hôte Local (Vous)".to_string(),
+                                    Language::En => "Local Host (You)".to_string(),
+                                    Language::Es => "Anfitrión Local (Tú)".to_string(),
+                                    Language::De => "Lokaler Host (Du)".to_string(),
+                                    Language::Pt => "Anfitrião Local (Você)".to_string(),
+                                }
+                            } else {
+                                s.owner_name.clone()
+                            };
                             (
                                 col,
-                                format!("Joueur {} (Slot #{})", slot_num, s.xinput_slot_index),
-                                s.owner_name.clone(),
+                                format!("{} {} (Slot #{})", player_word, slot_num, s.xinput_slot_index),
+                                owner_lbl,
                             )
                         } else {
                             (
                                 ModernTheme::BORDER_SUBTLE,
-                                format!("Joueur {} (Slot #{})", slot_num, slot_num - 1),
+                                format!("{} {} (Slot #{})", player_word, slot_num, slot_num - 1),
                                 match lang {
                                     Language::Fr => "En attente d'un ami...".to_string(),
                                     Language::En => "Waiting for a friend...".to_string(),
@@ -704,11 +758,24 @@ impl StreamingView {
 
                         // Ligne 1 : Profil Auto / Qualité Vidéo (Responsive avec horizontal_wrapped)
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new("Profil & Qualité vidéo :").strong());
+                            ui.label(
+                                RichText::new(match lang {
+                                    Language::Fr => "Profil & Qualité vidéo :",
+                                    Language::En => "Profile & Video Quality:",
+                                    Language::Es => "Perfil y Calidad de vídeo:",
+                                    Language::De => "Profil & Videoqualität:",
+                                    Language::Pt => "Perfil e Qualidade de vídeo:",
+                                })
+                                .strong(),
+                            );
                             if ui
                                 .selectable_label(
                                     engine.capture_host.auto_optimized_mode,
-                                    "Auto / Optimisé (Adaptatif)",
+                                    match lang {
+                                        Language::Fr => "Auto / Optimisé (Adaptatif)",
+                                        Language::En => "Auto / Optimized (Adaptive)",
+                                        _ => "Auto / Optimized",
+                                    },
                                 )
                                 .clicked()
                             {
@@ -718,7 +785,17 @@ impl StreamingView {
                             let is_1080 = !engine.capture_host.auto_optimized_mode
                                 && engine.capture_host.target_height == 1080
                                 && engine.capture_host.target_fps == 60;
-                            if ui.selectable_label(is_1080, "1080p @ 60 FPS (Recommandé)").clicked() {
+                            if ui
+                                .selectable_label(
+                                    is_1080,
+                                    match lang {
+                                        Language::Fr => "1080p @ 60 FPS (Recommandé)",
+                                        Language::En => "1080p @ 60 FPS (Recommended)",
+                                        _ => "1080p @ 60 FPS",
+                                    },
+                                )
+                                .clicked()
+                            {
                                 engine.capture_host.auto_optimized_mode = false;
                                 engine.capture_host.target_width = 1920;
                                 engine.capture_host.target_height = 1080;
@@ -727,7 +804,17 @@ impl StreamingView {
                             let is_1440 = !engine.capture_host.auto_optimized_mode
                                 && engine.capture_host.target_height == 1440
                                 && engine.capture_host.target_fps == 120;
-                            if ui.selectable_label(is_1440, "1440p @ 120 FPS (Ultra Fluide)").clicked() {
+                            if ui
+                                .selectable_label(
+                                    is_1440,
+                                    match lang {
+                                        Language::Fr => "1440p @ 120 FPS (Ultra Fluide)",
+                                        Language::En => "1440p @ 120 FPS (Ultra Smooth)",
+                                        _ => "1440p @ 120 FPS",
+                                    },
+                                )
+                                .clicked()
+                            {
                                 engine.capture_host.auto_optimized_mode = false;
                                 engine.capture_host.target_width = 2560;
                                 engine.capture_host.target_height = 1440;
@@ -739,7 +826,16 @@ impl StreamingView {
 
                         // Ligne 2 : Encodeur GPU Matériel (Responsive avec horizontal_wrapped)
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new("Encodeur GPU Matériel :").strong());
+                            ui.label(
+                                RichText::new(match lang {
+                                    Language::Fr => "Encodeur GPU Matériel :",
+                                    Language::En => "Hardware GPU Encoder:",
+                                    Language::Es => "Codificador GPU por Hardware:",
+                                    Language::De => "Hardware-GPU-Encoder:",
+                                    Language::Pt => "Codificador GPU por Hardware:",
+                                })
+                                .strong(),
+                            );
                             for enc in [
                                 HardwareEncoder::Nvenc,
                                 HardwareEncoder::Amf,
@@ -759,18 +855,35 @@ impl StreamingView {
 
                         // Ligne 3 : Options Audio Avancées (Isolation stricte du jeu + Volume + Anti-Écho)
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new("Volume du son du jeu transmis :").strong());
+                            ui.label(
+                                RichText::new(match lang {
+                                    Language::Fr => "Volume du son du jeu transmis :",
+                                    Language::En => "Streamed Game Audio Volume:",
+                                    Language::Es => "Volumen del juego transmitido:",
+                                    Language::De => "Übertragene Spiellautstärke:",
+                                    Language::Pt => "Volume do jogo transmitido:",
+                                })
+                                .strong(),
+                            );
                             ui.add(
                                 egui::Slider::new(&mut engine.capture_host.stream_audio_volume, 0..=100)
                                     .suffix("%"),
                             );
                             ui.checkbox(
                                 &mut engine.capture_host.exclude_voice_chat_apps,
-                                "Exclure Discord, TeamSpeak & Micro",
+                                match lang {
+                                    Language::Fr => "Exclure Discord, TeamSpeak & Micro",
+                                    Language::En => "Exclude Discord, TeamSpeak & Mic",
+                                    _ => "Exclude Discord & Mic",
+                                },
                             );
                             ui.checkbox(
                                 &mut engine.capture_host.acoustic_echo_cancellation,
-                                "Suppression d'écho acoustique (AEC)",
+                                match lang {
+                                    Language::Fr => "Suppression d'écho acoustique (AEC)",
+                                    Language::En => "Acoustic Echo Cancellation (AEC)",
+                                    _ => "Acoustic Echo Cancellation (AEC)",
+                                },
                             );
                         });
 
@@ -778,11 +891,24 @@ impl StreamingView {
 
                         // Ligne 4 : Type de manette virtuelle (Responsive avec horizontal_wrapped)
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new("Type de manette virtuelle :").strong());
+                            ui.label(
+                                RichText::new(match lang {
+                                    Language::Fr => "Type de manette virtuelle :",
+                                    Language::En => "Virtual Controller Type:",
+                                    Language::Es => "Tipo de mando virtual:",
+                                    Language::De => "Virtueller Controller-Typ:",
+                                    Language::Pt => "Tipo de comando virtual:",
+                                })
+                                .strong(),
+                            );
                             if ui
                                 .selectable_label(
                                     engine.capture_host.default_gamepad_type == VirtualGamepadType::Xbox360,
-                                    "Manette Xbox 360 (Compatible 100% des jeux PC)",
+                                    match lang {
+                                        Language::Fr => "Manette Xbox 360 (Compatible 100% des jeux PC)",
+                                        Language::En => "Xbox 360 Controller (100% PC Game Compatible)",
+                                        _ => "Xbox 360 Controller",
+                                    },
                                 )
                                 .clicked()
                             {
@@ -791,7 +917,11 @@ impl StreamingView {
                             if ui
                                 .selectable_label(
                                     engine.capture_host.default_gamepad_type == VirtualGamepadType::DualShock4,
-                                    "Manette PlayStation DualShock 4",
+                                    match lang {
+                                        Language::Fr => "Manette PlayStation DualShock 4",
+                                        Language::En => "PlayStation DualShock 4 Controller",
+                                        _ => "PlayStation DualShock 4",
+                                    },
                                 )
                                 .clicked()
                             {

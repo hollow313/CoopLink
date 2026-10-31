@@ -158,7 +158,7 @@ impl CentralTelemetryClient {
             let mut auto_http_endpoints: Vec<String> = Vec::new();
 
             loop {
-                if cycle % 3 == 0 {
+                if !me.server_connected.load(Ordering::Relaxed) && cycle % 6 == 0 {
                     if let Ok((found_ips, found_endpoints)) =
                         tokio::task::spawn_blocking(discover_hub_on_system).await
                     {
@@ -178,33 +178,7 @@ impl CentralTelemetryClient {
                     }
                 }
 
-                // 1. Envoi HTTPS prioritaire vers https://cooplink.home-lh.ovh (Reverse Proxy -> port 30024)
-                let raw_cfg = me.configured_central_raw.read().clone();
-                let mut https_urls = vec!["https://cooplink.home-lh.ovh".to_string()];
-                if raw_cfg.starts_with("https://") || raw_cfg.starts_with("http://") {
-                    let clean_url = raw_cfg.trim_end_matches('/').to_string();
-                    if !https_urls.contains(&clean_url) {
-                        https_urls.insert(0, clean_url);
-                    }
-                }
-
-                let mut http_ok = false;
-                for base_url in &https_urls {
-                    let url_clone = base_url.clone();
-                    let snap_clone = snap.clone();
-                    if let Ok(Some(ack)) = tokio::task::spawn_blocking(move || {
-                        send_https_telemetry_curl(&url_clone, &snap_clone)
-                    })
-                    .await
-                    {
-                        *me.assigned_id.write() = ack.assigned_instance_id;
-                        me.server_connected.store(true, Ordering::Relaxed);
-                        http_ok = true;
-                        break;
-                    }
-                }
-
-                // 2. Envoi UDP sur le port 30024 (Domaine OVH + IPs candidates)
+                // 1. Envoi UDP rapide en mémoire sur le port 30024 (Domaine OVH + IPs candidates, 0% CPU)
                 let discovered_udp = *me.discovered_server.read();
                 if let Some(srv) = discovered_udp {
                     let _ = socket.send_to(&udp_pkt, srv).await;
@@ -217,7 +191,9 @@ impl CentralTelemetryClient {
                     }
                 }
 
-                // 3. Envoi HTTP direct / LAN fallback (supporte 30024, 30025, 30026 sur le serveur local)
+                // 2. Envoi HTTP direct / LAN en mémoire (0 processus externe, 0% CPU)
+                let raw_cfg = me.configured_central_raw.read().clone();
+                let mut http_ok = false;
                 let known_endpoint = me.discovered_http_endpoint.read().clone();
                 if let Some(ref endpoint) = known_endpoint {
                     if let Some(ack) = send_http_telemetry_endpoint(endpoint, &snap).await {
@@ -255,13 +231,38 @@ impl CentralTelemetryClient {
                             *me.assigned_id.write() = ack.assigned_instance_id;
                             *me.discovered_http_endpoint.write() = Some(ep);
                             me.server_connected.store(true, Ordering::Relaxed);
+                            http_ok = true;
+                            break;
+                        }
+                    }
+                }
+
+                // 3. Envoi HTTPS vers https://cooplink.home-lh.ovh (Reverse Proxy -> port 30024)
+                if !http_ok || cycle % 2 == 1 {
+                    let mut https_urls = vec!["https://cooplink.home-lh.ovh".to_string()];
+                    if raw_cfg.starts_with("https://") || raw_cfg.starts_with("http://") {
+                        let clean_url = raw_cfg.trim_end_matches('/').to_string();
+                        if !https_urls.contains(&clean_url) {
+                            https_urls.insert(0, clean_url);
+                        }
+                    }
+                    for base_url in &https_urls {
+                        let url_clone = base_url.clone();
+                        let snap_clone = snap.clone();
+                        if let Ok(Some(ack)) = tokio::task::spawn_blocking(move || {
+                            send_https_telemetry_curl(&url_clone, &snap_clone)
+                        })
+                        .await
+                        {
+                            *me.assigned_id.write() = ack.assigned_instance_id;
+                            me.server_connected.store(true, Ordering::Relaxed);
                             break;
                         }
                     }
                 }
 
                 tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+                    _ = tokio::time::sleep(Duration::from_secs(5)) => {}
                     _ = me.wake_notify.notified() => {}
                 }
             }

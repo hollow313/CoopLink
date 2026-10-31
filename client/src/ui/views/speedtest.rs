@@ -418,10 +418,16 @@ impl SpeedtestView {
                                     });
                                     ui.add_space(8.0);
                                     ui.label(
-                                        RichText::new(format!("Note Hôte : {} / 100", res.host_score))
-                                            .color(ModernTheme::TEXT_PRIMARY)
-                                            .strong()
-                                            .size(26.0),
+                                        RichText::new(match lang {
+                                            Language::Fr => format!("Note Hôte : {} / 100", res.host_score),
+                                            Language::En => format!("Host Score: {} / 100", res.host_score),
+                                            Language::Es => format!("Nota de Anfitrión: {} / 100", res.host_score),
+                                            Language::De => format!("Host-Bewertung: {} / 100", res.host_score),
+                                            Language::Pt => format!("Nota de Anfitrião: {} / 100", res.host_score),
+                                        })
+                                        .color(ModernTheme::TEXT_PRIMARY)
+                                        .strong()
+                                        .size(26.0),
                                     );
                                     ui.add_space(4.0);
                                     ui.label(
@@ -453,7 +459,7 @@ impl SpeedtestView {
                                         .clicked()
                                     {
                                         let summary = format!(
-                                            "CoopLink Score Hôte ({}) : {}/100 [{}] — Upload: {:.1} Mbps | Download: {:.1} Mbps | Ping: {} ms | GPU: {}",
+                                            "CoopLink Score ({}) : {}/100 [{}] — Upload: {:.1} Mbps | Download: {:.1} Mbps | Ping: {} ms | GPU: {}",
                                             player_name,
                                             res.host_score,
                                             verdict_badge,
@@ -474,7 +480,7 @@ impl SpeedtestView {
                     // Grille des 4 métriques détaillées (responsive)
                     let gpu_subtitle = if let Some(vdd) = virtual_display_name {
                         if gpu_name.contains(vdd) {
-                            format!("{} + Écran Virtuel actif", active_encoder.display_name())
+                            format!("{} + Virtual Display", active_encoder.display_name())
                         } else {
                             format!("{} (+ {})", gpu_name, vdd)
                         }
@@ -482,27 +488,71 @@ impl SpeedtestView {
                         gpu_name.to_string()
                     };
 
+                    let enc_badge_translated = if lang != Language::Fr {
+                        active_encoder
+                            .short_badge()
+                            .replace("Matériel GPU", "Hardware GPU")
+                    } else {
+                        active_encoder.short_badge().to_string()
+                    };
+
                     ui.columns(4, |cols| {
                         Self::render_metric_box(
                             &mut cols[0],
                             ModernTheme::GREEN_VIVID,
-                            "DÉBIT MONTANT (UPLOAD)",
+                            match lang {
+                                Language::Fr => "DÉBIT MONTANT (UPLOAD)",
+                                Language::En => "UPLOAD BANDWIDTH",
+                                Language::Es => "VELOCIDAD DE SUBIDA (UPLOAD)",
+                                Language::De => "UPLOAD-GESCHWINDIGKEIT",
+                                Language::Pt => "VELOCIDADE DE UPLOAD",
+                            },
                             &format!("{:.1} Mbps", res.upload_mbps),
-                            "Crucial pour l'Hôte (> 20 Mbps rec.)",
+                            match lang {
+                                Language::Fr => "Crucial pour l'Hôte (> 20 Mbps rec.)",
+                                Language::En => "Crucial for Host (> 20 Mbps rec.)",
+                                Language::Es => "Crucial para Anfitrión (> 20 Mbps)",
+                                Language::De => "Wichtig für Host (> 20 Mbps empf.)",
+                                Language::Pt => "Crucial para Anfitrião (> 20 Mbps)",
+                            },
                         );
                         Self::render_metric_box(
                             &mut cols[1],
                             ModernTheme::BLUE_ELECTRIC,
-                            "DÉBIT DESCENDANT (DOWNLOAD)",
+                            match lang {
+                                Language::Fr => "DÉBIT DESCENDANT (DOWNLOAD)",
+                                Language::En => "DOWNLOAD BANDWIDTH",
+                                Language::Es => "VELOCIDAD DE BAJADA (DOWNLOAD)",
+                                Language::De => "DOWNLOAD-GESCHWINDIGKEIT",
+                                Language::Pt => "VELOCIDADE DE DOWNLOAD",
+                            },
                             &format!("{:.1} Mbps", res.download_mbps),
-                            "Crucial pour l'Invité (> 15 Mbps rec.)",
+                            match lang {
+                                Language::Fr => "Crucial pour l'Invité (> 15 Mbps rec.)",
+                                Language::En => "Crucial for Guest (> 15 Mbps rec.)",
+                                Language::Es => "Crucial para Invitado (> 15 Mbps)",
+                                Language::De => "Wichtig für Gast (> 15 Mbps empf.)",
+                                Language::Pt => "Crucial para Convidado (> 15 Mbps)",
+                            },
                         );
                         Self::render_metric_box(
                             &mut cols[2],
                             ModernTheme::CYAN_VIBRANT,
-                            "LATENCE & STABILITÉ",
+                            match lang {
+                                Language::Fr => "LATENCE & STABILITÉ",
+                                Language::En => "LATENCY & STABILITY",
+                                Language::Es => "LATENCIA Y ESTABILIDAD",
+                                Language::De => "LATENZ & STABILITÄT",
+                                Language::Pt => "LATÊNCIA E ESTABILIDADE",
+                            },
                             &format!("{} ms (Jitter {} ms)", res.ping_ms, res.jitter_ms),
-                            "Réactivité des manettes à distance",
+                            match lang {
+                                Language::Fr => "Réactivité des manettes à distance",
+                                Language::En => "Remote controller responsiveness",
+                                Language::Es => "Respuesta de mandos a distancia",
+                                Language::De => "Reaktionszeit der Controller",
+                                Language::Pt => "Resposta dos comandos remotos",
+                            },
                         );
                         Self::render_metric_box(
                             &mut cols[3],
@@ -511,8 +561,14 @@ impl SpeedtestView {
                             } else {
                                 ModernTheme::ORANGE_CORAL
                             },
-                            "ENCODEUR MATÉRIEL GPU",
-                            active_encoder.short_badge(),
+                            match lang {
+                                Language::Fr => "ENCODEUR MATÉRIEL GPU",
+                                Language::En => "HARDWARE GPU ENCODER",
+                                Language::Es => "CODIFICADOR GPU HARDWARE",
+                                Language::De => "HARDWARE-GPU-ENCODER",
+                                Language::Pt => "CODIFICADOR GPU HARDWARE",
+                            },
+                            &enc_badge_translated,
                             &gpu_subtitle,
                         );
                     });
@@ -612,15 +668,26 @@ impl SpeedtestView {
                             match lang {
                                 Language::Fr => "1. Activer l'Encodeur Matériel GPU Direct (NVIDIA NVENC / AMD AMF / Intel QuickSync)",
                                 Language::En => "1. Enable Direct Hardware GPU Encoder (NVIDIA NVENC / AMD AMF / Intel QuickSync)",
-                                _ => "1. Encodeur Matériel GPU Direct (NVENC / AMF / QuickSync)",
+                                _ => "1. Direct Hardware GPU Encoder (NVENC / AMF / QuickSync)",
                             },
                             if hw_ok {
-                                format!(
-                                    "Actif ({}) — Si vous avez un adaptateur d'écran virtuel (ex: SudoMaker Virtual Display), CoopLink utilise bien votre vraie puce GPU matérielle (+20/20 pts).",
-                                    active_encoder.display_name()
-                                )
+                                match lang {
+                                    Language::Fr => format!(
+                                        "Actif ({}) — Votre puce GPU matérielle encode directement le flux vidéo sans solliciter le processeur (+20/20 pts).",
+                                        active_encoder.display_name()
+                                    ),
+                                    Language::En => format!(
+                                        "Active ({}) — Your dedicated hardware GPU chip encodes the video stream directly with zero CPU load (+20/20 pts).",
+                                        active_encoder.display_name()
+                                    ),
+                                    _ => format!("Active ({}) (+20/20 pts).", active_encoder.display_name()),
+                                }
                             } else {
-                                "Actuellement sur Standard CPU (+8/20 pts) — Cliquez sur « Configuration Auto Optimisée » pour basculer sur votre GPU matériel et gagner +12 points sur votre note !".to_string()
+                                match lang {
+                                    Language::Fr => "Actuellement sur Standard CPU (+8/20 pts) — Cliquez sur « Configuration Auto Optimisée » pour basculer sur votre GPU matériel et gagner +12 points !".to_string(),
+                                    Language::En => "Currently on Standard CPU (+8/20 pts) — Click 'Apply Auto-Optimized Config' to switch to your hardware GPU encoder and gain +12 points!".to_string(),
+                                    _ => "Click 'Apply Auto-Optimized Config' to switch to Hardware GPU (+12 pts).".to_string(),
+                                }
                             },
                         );
 
@@ -630,12 +697,20 @@ impl SpeedtestView {
                             match lang {
                                 Language::Fr => "2. Priorité de la carte réseau virtuelle (Métrique Basse = 5)",
                                 Language::En => "2. Virtual Network Adapter Priority (Low Interface Metric = 5)",
-                                _ => "2. Priorité de l'interface réseau (Métrique = 5)",
+                                _ => "2. Virtual Network Adapter Priority (Metric = 5)",
                             },
                             if state.metric_applied {
-                                "Optimisé (Métrique 5 active) — Le tunnel P2P CoopLink passe en priorité devant votre carte Wi-Fi ou Ethernet.".to_string()
+                                match lang {
+                                    Language::Fr => "Optimisé (Métrique 5 active) — Le tunnel P2P CoopLink passe en priorité devant votre carte Wi-Fi ou Ethernet.".to_string(),
+                                    Language::En => "Optimized (Metric 5 active) — The CoopLink P2P tunnel takes priority over your Wi-Fi or Ethernet adapter.".to_string(),
+                                    _ => "Optimized (Metric 5 active).".to_string(),
+                                }
                             } else {
-                                "Recommandé — Appliquez la métrique prioritaire 5 pour éviter que Windows ne route les paquets du jeu sur la mauvaise interface.".to_string()
+                                match lang {
+                                    Language::Fr => "Recommandé — Appliquez la métrique prioritaire 5 pour router les paquets du jeu en priorité.".to_string(),
+                                    Language::En => "Recommended — Apply priority metric 5 so games discover your P2P LAN session first.".to_string(),
+                                    _ => "Recommended — Apply priority metric 5.".to_string(),
+                                }
                             },
                         );
 
@@ -645,12 +720,20 @@ impl SpeedtestView {
                             match lang {
                                 Language::Fr => "3. Autorisation Pare-feu (Windows / macOS / Linux) & Tunnel UDP Direct",
                                 Language::En => "3. OS Firewall Rules (Windows / macOS / Linux) & Direct UDP Tunnel",
-                                _ => "3. Autorisation Pare-feu & Tunnel UDP Direct",
+                                _ => "3. OS Firewall Rules & Direct UDP Tunnel",
                             },
                             if state.firewall_ok {
-                                "Opérationnel — Les règles pare-feu autorisent le trafic P2P direct (port UDP 42422 et sous-réseau 10.244.0.0/24) sans latence.".to_string()
+                                match lang {
+                                    Language::Fr => "Opérationnel — Les règles pare-feu autorisent le trafic P2P direct (port UDP 42422 et sous-réseau 10.244.0.0/24) sans latence.".to_string(),
+                                    Language::En => "Operational — Firewall rules allow direct P2P traffic (UDP port 42422 and virtual subnet 10.244.0.0/24) with zero latency.".to_string(),
+                                    _ => "Operational — Firewall rules active.".to_string(),
+                                }
                             } else {
-                                "Action conseillée — Cliquez sur « Configuration Auto Optimisée » pour appliquer les règles pare-feu immédiatement.".to_string()
+                                match lang {
+                                    Language::Fr => "Action conseillée — Cliquez sur « Configuration Auto Optimisée » pour appliquer les règles pare-feu immédiatement.".to_string(),
+                                    Language::En => "Recommended — Click 'Apply Auto-Optimized Config' to apply OS firewall rules immediately.".to_string(),
+                                    _ => "Click 'Apply Auto-Optimized Config' to configure firewall.".to_string(),
+                                }
                             },
                         );
 
@@ -661,12 +744,20 @@ impl SpeedtestView {
                             match lang {
                                 Language::Fr => "4. Privilégier un câble Ethernet RJ45 plutôt que le Wi-Fi pour héberger",
                                 Language::En => "4. Prefer a wired Ethernet RJ45 cable over Wi-Fi when hosting",
-                                _ => "4. Connexion Ethernet RJ45 recommandée pour l'Hôte",
+                                _ => "4. Wired Ethernet RJ45 connection recommended for Host",
                             },
                             if !is_wifi {
-                                "Connexion Ethernet détectée — Stabilité maximale et gigue (Jitter) minimale pour les manettes de vos invités.".to_string()
+                                match lang {
+                                    Language::Fr => "Connexion Ethernet détectée — Stabilité maximale et gigue (Jitter) minimale pour les manettes de vos invités.".to_string(),
+                                    Language::En => "Wired Ethernet detected — Maximum stability and minimal jitter for your friends' controllers.".to_string(),
+                                    _ => "Wired Ethernet detected — Maximum stability.".to_string(),
+                                }
                             } else {
-                                "Wi-Fi détecté — Pour éliminer les micro-coupures d'image et réduire la latence sous 10 ms, branchez un câble Ethernet si possible.".to_string()
+                                match lang {
+                                    Language::Fr => "Wi-Fi détecté — Pour éliminer les micro-coupures d'image et réduire la latence sous 10 ms, branchez un câble Ethernet si possible.".to_string(),
+                                    Language::En => "Wi-Fi detected — To eliminate micro-stutters and keep latency below 10 ms, use a wired Ethernet cable if possible.".to_string(),
+                                    _ => "Wi-Fi detected — Wired Ethernet recommended.".to_string(),
+                                }
                             },
                         );
                     });

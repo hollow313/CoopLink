@@ -1,3 +1,4 @@
+use crate::i18n::Language;
 use crate::types::{LogEntry, LogLevel};
 use crate::ui::retro_theme::ModernTheme;
 use egui::{RichText, Rounding, ScrollArea, Stroke, Ui};
@@ -5,7 +6,7 @@ use egui::{RichText, Rounding, ScrollArea, Stroke, Ui};
 pub struct ConsoleView;
 
 impl ConsoleView {
-    pub fn render(ui: &mut Ui, logs: &[LogEntry], on_clear_clicked: &mut bool) {
+    pub fn render(ui: &mut Ui, lang: Language, logs: &[LogEntry], on_clear_clicked: &mut bool) {
         ui.vertical(|ui| {
             egui::Frame::none()
                 .fill(ModernTheme::CARD_BG)
@@ -15,14 +16,29 @@ impl ConsoleView {
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new("Journal d'activité réseau & streaming")
-                                .color(ModernTheme::BLUE_ELECTRIC)
-                                .strong()
-                                .size(16.0),
+                            RichText::new(match lang {
+                                Language::Fr => "Journal d'activité réseau & partage de jeu",
+                                Language::En => "Network & Game Sharing Activity Log",
+                                Language::Es => "Registro de actividad de red y juego",
+                                Language::De => "Netzwerk- & Spiel-Aktivitätsprotokoll",
+                                Language::Pt => "Registo de atividade de rede e jogo",
+                            })
+                            .color(ModernTheme::BLUE_ELECTRIC)
+                            .strong()
+                            .size(16.0),
                         );
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Effacer l'historique").clicked() {
+                            if ui
+                                .button(match lang {
+                                    Language::Fr => "Effacer l'historique",
+                                    Language::En => "Clear Log",
+                                    Language::Es => "Borrar historial",
+                                    Language::De => "Verlauf löschen",
+                                    Language::Pt => "Limpar histórico",
+                                })
+                                .clicked()
+                            {
                                 *on_clear_clicked = true;
                             }
                         });
@@ -39,8 +55,14 @@ impl ConsoleView {
                         .show(ui, |ui| {
                             if logs.is_empty() {
                                 ui.label(
-                                    RichText::new("Aucun événement enregistré pour le moment.")
-                                        .color(ModernTheme::TEXT_MUTED),
+                                    RichText::new(match lang {
+                                        Language::Fr => "Aucun événement enregistré pour le moment.",
+                                        Language::En => "No activity events recorded yet.",
+                                        Language::Es => "Ningún evento registrado por el momento.",
+                                        Language::De => "Noch keine Ereignisse aufgezeichnet.",
+                                        Language::Pt => "Nenhum evento registado de momento.",
+                                    })
+                                    .color(ModernTheme::TEXT_MUTED),
                                 );
                             }
 
@@ -54,9 +76,30 @@ impl ConsoleView {
 
                                     let (tag, color) = match entry.level {
                                         LogLevel::Info => ("Info", ModernTheme::BLUE_ELECTRIC),
-                                        LogLevel::Warning => ("Alerte", ModernTheme::ORANGE_CORAL),
-                                        LogLevel::Error => ("Erreur", ModernTheme::RED_ERROR),
-                                        LogLevel::Success => ("Succès", ModernTheme::GREEN_VIVID),
+                                        LogLevel::Warning => (
+                                            match lang {
+                                                Language::Fr => "Alerte",
+                                                Language::En => "Warn",
+                                                _ => "Warn",
+                                            },
+                                            ModernTheme::ORANGE_CORAL,
+                                        ),
+                                        LogLevel::Error => (
+                                            match lang {
+                                                Language::Fr => "Erreur",
+                                                Language::En => "Error",
+                                                _ => "Error",
+                                            },
+                                            ModernTheme::RED_ERROR,
+                                        ),
+                                        LogLevel::Success => (
+                                            match lang {
+                                                Language::Fr => "Succès",
+                                                Language::En => "Ready",
+                                                _ => "OK",
+                                            },
+                                            ModernTheme::GREEN_VIVID,
+                                        ),
                                         LogLevel::Game => ("Session", ModernTheme::INDIGO_ACCENT),
                                     };
 
