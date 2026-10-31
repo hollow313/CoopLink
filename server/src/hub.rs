@@ -196,12 +196,7 @@ impl ServerHub {
         }
     }
 
-    async fn handle_instance_heartbeat(
-        &self,
-        src_endpoint: SocketAddr,
-        payload: TelemetryPayload,
-        socket: &Arc<UdpSocket>,
-    ) {
+    pub fn process_telemetry(&self, payload: TelemetryPayload) -> TelemetryAck {
         let now = current_timestamp_secs();
         let assigned_id = {
             let mut instances = self.instances_by_uuid.write();
@@ -246,11 +241,20 @@ impl ServerHub {
             }
         };
 
-        let ack = TelemetryAck {
+        TelemetryAck {
             assigned_instance_id: assigned_id,
             active_tunnels: self.get_active_tunnels_count(),
             active_instances: self.get_active_instances_count(),
-        };
+        }
+    }
+
+    async fn handle_instance_heartbeat(
+        &self,
+        src_endpoint: SocketAddr,
+        payload: TelemetryPayload,
+        socket: &Arc<UdpSocket>,
+    ) {
+        let ack = self.process_telemetry(payload);
 
         if let Ok(json_bytes) = serde_json::to_vec(&ack) {
             let mut pkt = Vec::with_capacity(10 + json_bytes.len());

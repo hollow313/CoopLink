@@ -15,7 +15,7 @@ use crate::streaming::StreamingEngine;
 use crate::types::{AppState, ConnectionStatus, LogEntry, LogLevel, NodeRole};
 use chrono::Local;
 use eframe::egui;
-use egui::{Color32, RichText, TextureHandle};
+use egui::{Color32, CursorIcon, RichText, TextureHandle};
 use logo::load_embedded_logo;
 use parking_lot::Mutex;
 use retro_theme::ModernTheme;
@@ -29,12 +29,14 @@ use views::firewall::FirewallView;
 use views::lobby::LobbyView;
 use views::network::NetworkView;
 use views::settings::SettingsView;
+use views::speedtest::{SpeedtestManager, SpeedtestView};
 use views::streaming::StreamingView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {
     Lobby,
     Streaming,
+    Speedtest,
     Network,
     Firewall,
     Settings,
@@ -53,6 +55,7 @@ pub struct CoopLinkApp {
     pub upnp_mgr: Arc<Mutex<UpnpManager>>,
     pub telemetry: Arc<CentralTelemetryClient>,
     pub streaming_engine: StreamingEngine,
+    pub speedtest_mgr: SpeedtestManager,
     pub to_adapter_tx: mpsc::Sender<Vec<u8>>,
     pub from_net_rx: Option<mpsc::Receiver<Vec<u8>>>,
     pub to_bcast_tx: mpsc::Sender<(u16, Vec<u8>)>,
@@ -77,8 +80,8 @@ impl CoopLinkApp {
         let broadcast_relay = Arc::new(BroadcastRelay::new());
         let upnp_mgr = Arc::new(Mutex::new(UpnpManager::new()));
         let streaming_engine = StreamingEngine::new(config.host_virtual_ip);
+        let speedtest_mgr = SpeedtestManager::new();
 
-        // Client de télémétrie & d'attribution d'ID unique auprès du container central (UDP 30024)
         let telemetry = CentralTelemetryClient::new(
             config.instance_uuid,
             config.player_name.clone(),
@@ -111,6 +114,7 @@ impl CoopLinkApp {
             upnp_mgr,
             telemetry,
             streaming_engine,
+            speedtest_mgr,
             to_adapter_tx,
             from_net_rx: Some(from_net_rx),
             to_bcast_tx,
@@ -124,7 +128,7 @@ impl CoopLinkApp {
         app.trigger_refresh_interfaces();
         app.add_log(
             LogLevel::Success,
-            "CoopLink prêt (Architecture P2P directe & Partage d'Écran Coopératif actifs).",
+            "CoopLink prêt (Tunnel P2P Chiffré E2E & Partage de Jeu au Premier Plan actifs).",
         );
 
         if app.config.auto_firewall_rule && !app.state.firewall_ok {
@@ -168,7 +172,7 @@ impl CoopLinkApp {
         );
         let is_host = self.state.role == NodeRole::Host;
         let screen_sharing =
-            self.streaming_engine.sunshine_host.is_running || self.streaming_engine.moonlight_client.is_streaming;
+            self.streaming_engine.capture_host.is_running || self.streaming_engine.stream_viewer.is_streaming;
         self.telemetry.update_state(
             &self.config.player_name,
             tunnel_mounted,
@@ -184,6 +188,16 @@ impl CoopLinkApp {
 
 impl eframe::App for CoopLinkApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Interception de la fermeture par la croix (X) -> Réduit le logiciel en arrière-plan pour laisser le jeu au premier plan
+        if ctx.input(|i| i.viewport().close_requested()) && self.config.close_to_background {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            self.add_log(
+                LogLevel::Info,
+                "CoopLink réduit en arrière-plan (votre tunnel P2P et le partage de jeu continuent).",
+            );
+        }
+
         if let Some(ref rx) = self.interfaces_rx {
             if let Ok(ifaces) = rx.try_recv() {
                 self.state.cached_interfaces = ifaces;
@@ -255,7 +269,6 @@ impl eframe::App for CoopLinkApp {
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Sélecteur de langue international (FR / EN / ES / DE / PT)
                         let prev_lang = self.config.language;
                         egui::ComboBox::from_id_salt("header_lang_selector")
                             .selected_text(
@@ -263,13 +276,13 @@ impl eframe::App for CoopLinkApp {
                                     .color(ModernTheme::BLUE_ELECTRIC)
                                     .strong(),
                             )
-                            .width(56.0)
+                            .width(66.0)
                             .show_ui(ui, |ui| {
                                 for &l in Language::all() {
                                     ui.selectable_value(
                                         &mut self.config.language,
                                         l,
-                                        format!("{} — {}", l.code(), l.display_name()),
+                                        l.display_name(),
                                     );
                                 }
                             });
@@ -279,7 +292,7 @@ impl eframe::App for CoopLinkApp {
 
                         ui.add_space(6.0);
 
-                        // Pastille verte "Prêt" (ou statut actif) dessinée en vectoriel pur (jamais de carré ☐)
+                        // Pastille verte "Prêt" dessinée en vectoriel pur
                         let (pill_color, status_label) = match self.state.status {
                             ConnectionStatus::Hosting => (ModernTheme::GREEN_VIVID, I18n::status_hosting(lang)),
                             ConnectionStatus::Connected => (ModernTheme::GREEN_VIVID, I18n::status_connected(lang)),
@@ -303,7 +316,7 @@ impl eframe::App for CoopLinkApp {
                                     ModernTheme::draw_dot(
                                         ui,
                                         if self.state.central_server_connected {
-                                            ModernTheme::CYAN_VIBRANT
+                                            ModernTheme::GREEN_VIVID
                                         } else {
                                             ModernTheme::BLUE_ELECTRIC
                                         },
@@ -334,6 +347,12 @@ impl eframe::App for CoopLinkApp {
                     tab_button(
                         ui,
                         &mut self.active_tab,
+                        ActiveTab::Speedtest,
+                        I18n::tab_speedtest(lang),
+                    );
+                    tab_button(
+                        ui,
+                        &mut self.active_tab,
                         ActiveTab::Network,
                         I18n::tab_network(lang),
                     );
@@ -353,6 +372,7 @@ impl eframe::App for CoopLinkApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
+                    ModernTheme::draw_dot(ui, ModernTheme::GREEN_VIVID, 3.8);
                     ui.label(
                         RichText::new(I18n::footer_traffic(
                             lang,
@@ -425,6 +445,15 @@ impl eframe::App for CoopLinkApp {
                             &mut on_stop_client_stream,
                         );
                     }
+                    ActiveTab::Speedtest => {
+                        SpeedtestView::render(
+                            ui,
+                            lang,
+                            &mut self.speedtest_mgr,
+                            &self.streaming_engine.capture_host.detected_gpu_name,
+                            &self.config.player_name,
+                        );
+                    }
                     ActiveTab::Network => {
                         NetworkView::render(
                             ui,
@@ -473,23 +502,24 @@ impl eframe::App for CoopLinkApp {
                 }
                 if on_start_host_stream {
                     let vip = self.state.virtual_ip.unwrap_or(self.config.host_virtual_ip);
-                    let _ = self.streaming_engine.sunshine_host.start_daemon(vip);
+                    let app_target = self.streaming_engine.selected_app_name.clone();
+                    let _ = self.streaming_engine.capture_host.start_daemon(vip, &app_target);
                     self.add_log(
                         LogLevel::Game,
                         &format!(
-                            "Partage d'écran CoopLink démarré sur l'interface virtuelle {} (Source : '{}', Encodeur : {}).",
+                            "Partage du jeu au premier plan démarré sur {} (Jeu : '{}', Encodeur : {}, Anti-écho audio actif).",
                             vip,
-                            self.streaming_engine.selected_app_name,
-                            self.streaming_engine.sunshine_host.active_encoder.display_name()
+                            app_target,
+                            self.streaming_engine.capture_host.active_encoder.display_name()
                         ),
                     );
                 }
                 if on_stop_host_stream {
-                    self.streaming_engine.sunshine_host.stop_daemon();
-                    self.add_log(LogLevel::Warning, "Partage d'écran CoopLink arrêté.");
+                    self.streaming_engine.capture_host.stop_daemon();
+                    self.add_log(LogLevel::Warning, "Partage de jeu arrêté.");
                 }
                 if on_start_client_stream {
-                    let host_vip = self.streaming_engine.moonlight_client.target_host_vip;
+                    let host_vip = self.streaming_engine.stream_viewer.target_host_vip;
                     let my_vip = self.state.virtual_ip.unwrap_or(Ipv4Addr::new(10, 244, 0, 2));
                     let req = self.streaming_engine.pairing.build_pair_request(
                         1002,
@@ -499,7 +529,7 @@ impl eframe::App for CoopLinkApp {
                     );
                     let slot = self
                         .streaming_engine
-                        .sunshine_host
+                        .capture_host
                         .assign_remote_controller_slot(&self.config.player_name, my_vip);
                     let ack = self
                         .streaming_engine
@@ -510,19 +540,19 @@ impl eframe::App for CoopLinkApp {
                     let app_name = self.streaming_engine.selected_app_name.clone();
                     let _ = self
                         .streaming_engine
-                        .moonlight_client
+                        .stream_viewer
                         .start_stream(host_vip, &app_name);
                     self.add_log(
                         LogLevel::Success,
                         &format!(
-                            "Connexion automatique réussie & Écran partagé ouvert vers {} (Assigné : Joueur {}).",
+                            "Session de jeu partagé ouverte vers {} (Assigné : Joueur {}).",
                             host_vip, slot
                         ),
                     );
                 }
                 if on_stop_client_stream {
-                    self.streaming_engine.moonlight_client.stop_stream();
-                    self.add_log(LogLevel::Info, "Session d'écran partagé fermée.");
+                    self.streaming_engine.stream_viewer.stop_stream();
+                    self.add_log(LogLevel::Info, "Session de jeu partagé fermée.");
                 }
             });
 
@@ -573,14 +603,15 @@ impl CoopLinkApp {
             }
         });
 
-        let _ = self.streaming_engine.sunshine_host.start_daemon(host_ip);
+        let app_target = self.streaming_engine.selected_app_name.clone();
+        let _ = self.streaming_engine.capture_host.start_daemon(host_ip, &app_target);
 
         self.apply_low_metric();
         self.sync_telemetry();
         self.add_log(
             LogLevel::Success,
             &format!(
-                "Salon hébergé actif sur {} (Prêt pour les jeux LAN et le partage d'écran Co-op).",
+                "Salon hébergé actif sur {} (Prêt pour les jeux LAN et le partage de jeu Co-op).",
                 host_ip
             ),
         );
@@ -654,15 +685,15 @@ impl CoopLinkApp {
         self.sync_telemetry();
         self.add_log(
             LogLevel::Success,
-            "Connexion directe P2P établie ! Vous pouvez lancer votre jeu LAN ou rejoindre l'écran partagé.",
+            "Connexion directe P2P établie ! Vous pouvez lancer votre jeu LAN ou rejoindre le jeu partagé.",
         );
     }
 
     fn disconnect_node(&mut self) {
         self.tunnel.stop();
         self.broadcast_relay.stop();
-        self.streaming_engine.sunshine_host.stop_daemon();
-        self.streaming_engine.moonlight_client.stop_stream();
+        self.streaming_engine.capture_host.stop_daemon();
+        self.streaming_engine.stream_viewer.stop_stream();
         self.upnp_mgr.lock().close_port();
         self.state.public_ip = None;
         self.state.status = ConnectionStatus::Disconnected;
@@ -729,7 +760,7 @@ fn tab_button(ui: &mut egui::Ui, current: &mut ActiveTab, tab: ActiveTab, label:
         })
         .rounding(egui::Rounding::same(8.0));
 
-    if ui.add(btn).clicked() {
+    if ui.add(btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
         *current = tab;
     }
 }

@@ -1,10 +1,10 @@
 use crate::config::ServerConfig;
-use crate::hub::ServerHub;
+use crate::hub::{ServerHub, TelemetryPayload};
 use axum::{
     extract::State,
     http::{header, StatusCode},
     response::{Html, IntoResponse, Json},
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use serde_json::json;
@@ -24,6 +24,7 @@ pub async fn start_web_server(hub: Arc<ServerHub>, config: ServerConfig) {
         .route("/", get(render_dashboard))
         .route("/logo.png", get(serve_logo))
         .route("/api/stats", get(get_stats_api))
+        .route("/api/telemetry", post(post_telemetry_api))
         .with_state(state.clone());
 
     let bind_addr = format!("0.0.0.0:{}", state.config.web_port);
@@ -41,6 +42,14 @@ async fn serve_logo() -> impl IntoResponse {
         [(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=86400")],
         bytes.as_slice(),
     )
+}
+
+async fn post_telemetry_api(
+    State(state): State<WebState>,
+    Json(payload): Json<TelemetryPayload>,
+) -> impl IntoResponse {
+    let ack = state.hub.process_telemetry(payload);
+    Json(ack)
 }
 
 async fn get_stats_api(State(state): State<WebState>) -> impl IntoResponse {

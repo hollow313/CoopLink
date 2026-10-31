@@ -11,11 +11,26 @@ pub enum Language {
 
 impl Default for Language {
     fn default() -> Self {
-        Language::Fr
+        Self::from_os_locale()
     }
 }
 
 impl Language {
+    pub fn from_os_locale() -> Self {
+        let locale = crate::platform::windows::process::detect_windows_os_locale();
+        if locale.starts_with("fr") {
+            Language::Fr
+        } else if locale.starts_with("es") {
+            Language::Es
+        } else if locale.starts_with("de") {
+            Language::De
+        } else if locale.starts_with("pt") {
+            Language::Pt
+        } else {
+            Language::En
+        }
+    }
+
     pub fn all() -> &'static [Language] {
         &[
             Language::Fr,
@@ -29,7 +44,7 @@ impl Language {
     pub fn code(&self) -> &'static str {
         match self {
             Language::Fr => "FR",
-            Language::En => "EN",
+            Language::En => "US/EN",
             Language::Es => "ES",
             Language::De => "DE",
             Language::Pt => "PT",
@@ -38,11 +53,11 @@ impl Language {
 
     pub fn display_name(&self) -> &'static str {
         match self {
-            Language::Fr => "Français",
-            Language::En => "English",
-            Language::Es => "Español",
-            Language::De => "Deutsch",
-            Language::Pt => "Português",
+            Language::Fr => "Français (FR)",
+            Language::En => "English (US)",
+            Language::Es => "Español (ES)",
+            Language::De => "Deutsch (DE)",
+            Language::Pt => "Português (PT)",
         }
     }
 }
@@ -50,14 +65,13 @@ impl Language {
 pub struct I18n;
 
 impl I18n {
-    // --- Barre supérieure & Statuts ---
     pub fn app_subtitle(lang: Language) -> &'static str {
         match lang {
-            Language::Fr => "Réseau Virtuel P2P & Partage de Jeu Coopératif",
-            Language::En => "Virtual P2P LAN & Co-op Game Sharing",
-            Language::Es => "Red Virtual P2P y Pantalla Compartida Co-op",
-            Language::De => "Virtuelles P2P-LAN & Co-op Spiel-Sharing",
-            Language::Pt => "Rede Virtual P2P e Partilha de Jogo Co-op",
+            Language::Fr => "Réseau Virtuel P2P Chiffré & Partage de Jeu Co-op",
+            Language::En => "Encrypted Virtual P2P LAN & Co-op Game Sharing",
+            Language::Es => "Red Virtual P2P Cifrada y Juego Compartido Co-op",
+            Language::De => "Verschlüsseltes P2P-LAN & Co-op Spiel-Freigabe",
+            Language::Pt => "Rede Virtual P2P Encriptada e Partilha de Jogo Co-op",
         }
     }
 
@@ -111,7 +125,6 @@ impl I18n {
         }
     }
 
-    // --- Onglets ---
     pub fn tab_lobby(lang: Language) -> &'static str {
         match lang {
             Language::Fr => "Salons & Réseau P2P",
@@ -124,11 +137,21 @@ impl I18n {
 
     pub fn tab_streaming(lang: Language) -> &'static str {
         match lang {
-            Language::Fr => "Écran Partagé & Manettes",
-            Language::En => "Shared Screen & Controllers",
-            Language::Es => "Pantalla y Mandos Co-op",
-            Language::De => "Bildschirm & Controller",
-            Language::Pt => "Ecrã Partilhado e Comandos",
+            Language::Fr => "Partage de Jeu & Manettes",
+            Language::En => "Game Share & Controllers",
+            Language::Es => "Juego y Mandos Co-op",
+            Language::De => "Spiel & Controller",
+            Language::Pt => "Partilha e Comandos",
+        }
+    }
+
+    pub fn tab_speedtest(lang: Language) -> &'static str {
+        match lang {
+            Language::Fr => "Débit & Score Hôte",
+            Language::En => "Speed & Host Score",
+            Language::Es => "Velocidad y Nota",
+            Language::De => "Speedtest & Score",
+            Language::Pt => "Velocidade e Nota",
         }
     }
 
@@ -172,14 +195,13 @@ impl I18n {
         }
     }
 
-    // --- Barre inférieure ---
     pub fn footer_traffic(lang: Language, tx_kb: f64, rx_kb: f64) -> String {
         match lang {
-            Language::Fr => format!("Trafic P2P Direct — Envoyé : {:.2} Ko | Reçu : {:.2} Ko", tx_kb, rx_kb),
-            Language::En => format!("Direct P2P Traffic — Sent: {:.2} KB | Received: {:.2} KB", tx_kb, rx_kb),
-            Language::Es => format!("Tráfico P2P Directo — Enviado: {:.2} KB | Recibido: {:.2} KB", tx_kb, rx_kb),
-            Language::De => format!("Direkter P2P-Verkehr — Gesendet: {:.2} KB | Empfangen: {:.2} KB", tx_kb, rx_kb),
-            Language::Pt => format!("Tráfego P2P Direto — Enviado: {:.2} KB | Recebido: {:.2} KB", tx_kb, rx_kb),
+            Language::Fr => format!("Tunnel P2P Chiffré E2E — Envoyé : {:.2} Ko | Reçu : {:.2} Ko", tx_kb, rx_kb),
+            Language::En => format!("Encrypted E2E P2P Tunnel — Sent: {:.2} KB | Received: {:.2} KB", tx_kb, rx_kb),
+            Language::Es => format!("Túnel P2P Cifrado E2E — Enviado: {:.2} KB | Recibido: {:.2} KB", tx_kb, rx_kb),
+            Language::De => format!("Verschlüsselter P2P-Tunnel — Gesendet: {:.2} KB | Empfangen: {:.2} KB", tx_kb, rx_kb),
+            Language::Pt => format!("Túnel P2P Encriptado E2E — Enviado: {:.2} KB | Recebido: {:.2} KB", tx_kb, rx_kb),
         }
     }
 

@@ -41,6 +41,10 @@ struct Args {
     /// Code de salon
     #[arg(short, long)]
     room: Option<String>,
+
+    /// Démarre l'application réduite en arrière-plan (au lancement automatique Windows)
+    #[arg(long, default_value_t = false)]
+    minimized: bool,
 }
 
 fn main() -> eframe::Result<()> {
@@ -73,11 +77,12 @@ fn main() -> eframe::Result<()> {
     }
 
     // Lancement de l'interface graphique moderne Windows 11 (eframe / egui)
+    let start_minimized = args.minimized;
     let mut vp = egui::ViewportBuilder::default()
         .with_title("CoopLink")
-        .with_inner_size([1020.0, 700.0])
-        .with_min_inner_size([840.0, 580.0])
-        .with_active(true)
+        .with_inner_size([1040.0, 710.0])
+        .with_min_inner_size([860.0, 580.0])
+        .with_active(!start_minimized)
         .with_decorations(true)
         .with_resizable(true);
 
@@ -100,6 +105,9 @@ fn main() -> eframe::Result<()> {
         "CoopLink",
         native_options,
         Box::new(move |cc| {
+            if start_minimized {
+                cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            }
             Ok(Box::new(CoopLinkApp::new(cc, rt)))
         }),
     )

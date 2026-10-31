@@ -1,10 +1,10 @@
 use crate::i18n::Language;
-use crate::streaming::moonlight_client::{StreamDisplayMode, VideoCodec};
-use crate::streaming::sunshine_host::{HardwareEncoder, VirtualGamepadType};
+use crate::streaming::capture_host::{HardwareEncoder, VirtualGamepadType};
+use crate::streaming::stream_viewer::{StreamDisplayMode, VideoCodec};
 use crate::streaming::{CoopInputMode, StreamingEngine, StreamingRoleTab};
 use crate::types::{AppState, NodeRole};
 use crate::ui::retro_theme::ModernTheme;
-use egui::{Color32, RichText, Rounding, Stroke, Ui};
+use egui::{Color32, CursorIcon, RichText, Rounding, Stroke, Ui};
 
 pub struct StreamingView;
 
@@ -19,7 +19,6 @@ impl StreamingView {
         on_start_client_stream: &mut bool,
         on_stop_client_stream: &mut bool,
     ) {
-        // Synchronise automatiquement l'onglet selon le rôle dans le salon si actif
         if state.role == NodeRole::Host {
             engine.role_tab = StreamingRoleTab::HostShareMyGame;
         } else if state.role == NodeRole::Client {
@@ -42,11 +41,11 @@ impl StreamingView {
                             ui.vertical(|ui| {
                                 ui.label(
                                     RichText::new(match lang {
-                                        Language::Fr => "Jouez ensemble sur le même écran, à distance",
-                                        Language::En => "Play together on the same screen, remotely",
-                                        Language::Es => "Jueguen juntos en la misma pantalla a distancia",
-                                        Language::De => "Gemeinsam auf demselben Bildschirm aus der Ferne spielen",
-                                        Language::Pt => "Joguem juntos no mesmo ecrã à distância",
+                                        Language::Fr => "Jouez ensemble sur le même jeu, à distance",
+                                        Language::En => "Play together on the same game, remotely",
+                                        Language::Es => "Jueguen juntos en el mismo juego a distancia",
+                                        Language::De => "Gemeinsam dasselbe Spiel aus der Ferne spielen",
+                                        Language::Pt => "Joguem juntos no mesmo jogo à distância",
                                     })
                                     .color(ModernTheme::TEXT_PRIMARY)
                                     .strong()
@@ -54,11 +53,11 @@ impl StreamingView {
                                 );
                                 ui.label(
                                     RichText::new(match lang {
-                                        Language::Fr => "Un seul joueur a besoin de posséder et lancer le jeu (l'Hôte). Les amis rejoignent son écran en temps réel avec leur manette ou leur clavier/souris.",
-                                        Language::En => "Only one player needs to own and launch the game (the Host). Friends join their screen in real time using their controller or keyboard/mouse.",
-                                        Language::Es => "Solo un jugador necesita tener el juego (el Anfitrión). Tus amigos se unen a tu pantalla en tiempo real con su mando o teclado/ratón.",
-                                        Language::De => "Nur ein Spieler muss das Spiel besitzen (der Host). Freunde treten dem Bildschirm in Echtzeit mit Controller oder Tastatur/Maus bei.",
-                                        Language::Pt => "Apenas um jogador precisa de ter o jogo (o Anfitrião). Os amigos juntam-se ao ecrã em tempo real com comando ou teclado/rato.",
+                                        Language::Fr => "Seul le jeu ouvert au premier plan est diffusé (CoopLink reste en arrière-plan). L'anti-écho audio filtre automatiquement vos logiciels de discussion vocale.",
+                                        Language::En => "Only the foreground game is streamed (CoopLink stays in the background). Built-in audio anti-echo automatically filters out voice chat apps.",
+                                        Language::Es => "Solo se transmite el juego en primer plano (CoopLink queda en segundo plano). El filtro anti-eco excluye automáticamente el chat de voz.",
+                                        Language::De => "Nur das Spiel im Vordergrund wird übertragen. Der integrierte Audio-Echo-Schutz filtert Sprachchats automatisch heraus.",
+                                        Language::Pt => "Apenas o jogo em primeiro plano é transmitido. O filtro anti-eco exclui automaticamente o chat de voz.",
                                     })
                                     .color(ModernTheme::TEXT_SECONDARY)
                                     .size(13.5),
@@ -66,7 +65,7 @@ impl StreamingView {
                             });
 
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if engine.sunshine_host.is_running || engine.moonlight_client.is_streaming {
+                                if engine.capture_host.is_running || engine.stream_viewer.is_streaming {
                                     ModernTheme::status_pill(
                                         ui,
                                         ModernTheme::GREEN_VIVID,
@@ -74,7 +73,7 @@ impl StreamingView {
                                             Language::Fr => "Partage en cours",
                                             Language::En => "Sharing Active",
                                             Language::Es => "Compartiendo",
-                                            Language::De => "Sharing Aktiv",
+                                            Language::De => "Freigabe Aktiv",
                                             Language::Pt => "Partilha Ativa",
                                         },
                                     );
@@ -83,11 +82,11 @@ impl StreamingView {
                                         ui,
                                         ModernTheme::GREEN_VIVID,
                                         match lang {
-                                            Language::Fr => "Prêt à partager",
-                                            Language::En => "Ready to share",
-                                            Language::Es => "Listo para compartir",
-                                            Language::De => "Bereit zum Teilen",
-                                            Language::Pt => "Pronto a partilhar",
+                                            Language::Fr => "Prêt",
+                                            Language::En => "Ready",
+                                            Language::Es => "Listo",
+                                            Language::De => "Bereit",
+                                            Language::Pt => "Pronto",
                                         },
                                     );
                                 }
@@ -96,7 +95,6 @@ impl StreamingView {
 
                         ui.add_space(14.0);
 
-                        // Sélecteur visuel : Hôte vs Invité
                         ui.columns(2, |cols| {
                             let is_host_tab = engine.role_tab == StreamingRoleTab::HostShareMyGame;
                             let host_btn_text = match lang {
@@ -120,17 +118,17 @@ impl StreamingView {
                             .rounding(Rounding::same(10.0))
                             .min_size(egui::vec2(cols[0].available_width(), 44.0));
 
-                            if cols[0].add(host_btn).clicked() {
+                            if cols[0].add(host_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                 engine.role_tab = StreamingRoleTab::HostShareMyGame;
                             }
 
                             let is_guest_tab = engine.role_tab == StreamingRoleTab::GuestJoinFriendGame;
                             let guest_btn_text = match lang {
-                                Language::Fr => "2. Je suis l'Invité (Je rejoins l'écran de mon ami)",
-                                Language::En => "2. I am the Guest (I join my friend's screen)",
-                                Language::Es => "2. Soy el Invitado (Me uno a la pantalla de mi amigo)",
-                                Language::De => "2. Ich bin Gast (Ich trete dem Bildschirm bei)",
-                                Language::Pt => "2. Sou Convidado (Junto-me ao ecrã do meu amigo)",
+                                Language::Fr => "2. Je suis l'Invité (Je rejoins le jeu de mon ami)",
+                                Language::En => "2. I am the Guest (I join my friend's game)",
+                                Language::Es => "2. Soy el Invitado (Me uno al juego de mi amigo)",
+                                Language::De => "2. Ich bin Gast (Ich trete dem Spiel bei)",
+                                Language::Pt => "2. Sou Convidado (Junto-me ao jogo do meu amigo)",
                             };
                             let guest_btn = egui::Button::new(
                                 RichText::new(guest_btn_text)
@@ -146,7 +144,7 @@ impl StreamingView {
                             .rounding(Rounding::same(10.0))
                             .min_size(egui::vec2(cols[1].available_width(), 44.0));
 
-                            if cols[1].add(guest_btn).clicked() {
+                            if cols[1].add(guest_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                 engine.role_tab = StreamingRoleTab::GuestJoinFriendGame;
                             }
                         });
@@ -188,7 +186,7 @@ impl StreamingView {
         on_stop_host_stream: &mut bool,
     ) {
         // =========================================================================
-        // ÉTAPE 1 : SÉLECTION DU JEU OU DE L'ÉCRAN À PARTAGER
+        // ÉTAPE 1 : SÉLECTION DU JEU AU PREMIER PLAN UNIQUEMENT
         // =========================================================================
         egui::Frame::none()
             .fill(ModernTheme::CARD_BG)
@@ -200,11 +198,11 @@ impl StreamingView {
                     ModernTheme::draw_dot(ui, ModernTheme::BLUE_ELECTRIC, 5.0);
                     ui.label(
                         RichText::new(match lang {
-                            Language::Fr => "Étape 1 — Choisissez le jeu ou l'écran à partager",
-                            Language::En => "Step 1 — Select the game or screen to share",
-                            Language::Es => "Paso 1 — Elige el juego o la pantalla a compartir",
-                            Language::De => "Schritt 1 — Spiel oder Bildschirm zum Teilen wählen",
-                            Language::Pt => "Passo 1 — Escolha o jogo ou ecrã a partilhar",
+                            Language::Fr => "Étape 1 — Sélectionnez le jeu à partager (Premier plan uniquement)",
+                            Language::En => "Step 1 — Select the game to share (Foreground game only)",
+                            Language::Es => "Paso 1 — Selecciona el juego a compartir (Solo primer plano)",
+                            Language::De => "Schritt 1 — Spiel zum Teilen auswählen (Nur Vordergrund-Spiel)",
+                            Language::Pt => "Passo 1 — Selecione o jogo a partilhar (Apenas primeiro plano)",
                         })
                         .color(ModernTheme::BLUE_ELECTRIC)
                         .strong()
@@ -214,11 +212,11 @@ impl StreamingView {
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new(match lang {
-                        Language::Fr => "Sélectionnez un jeu déjà ouvert dans la liste, choisissez son fichier .exe sur votre PC, ou partagez votre écran complet :",
-                        Language::En => "Pick an already running game from the list, browse for its .exe file on your PC, or share your full desktop screen:",
-                        Language::Es => "Selecciona un juego abierto en la lista, busca su archivo .exe en tu PC o comparte la pantalla completa:",
-                        Language::De => "Wähle ein laufendes Spiel aus der Liste, suche die .exe-Datei oder teile deinen gesamten Bildschirm:",
-                        Language::Pt => "Selecione um jogo aberto na lista, procure o ficheiro .exe no PC ou partilhe o ecrã inteiro:",
+                        Language::Fr => "Seule la fenêtre du jeu au premier plan est diffusée à vos amis pendant que CoopLink reste en arrière-plan :",
+                        Language::En => "Only the foreground game window is streamed to your friends while CoopLink stays in the background:",
+                        Language::Es => "Solo se transmite la ventana del juego en primer plano mientras CoopLink permanece en segundo plano:",
+                        Language::De => "Nur das Spielfenster im Vordergrund wird übertragen, während CoopLink im Hintergrund bleibt:",
+                        Language::Pt => "Apenas a janela do jogo em primeiro plano é transmitida enquanto o CoopLink fica em segundo plano:",
                     })
                     .color(ModernTheme::TEXT_SECONDARY)
                     .size(13.0),
@@ -229,11 +227,11 @@ impl StreamingView {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new(match lang {
-                            Language::Fr => "Jeu / Fenêtre cible :",
-                            Language::En => "Target Game / Window:",
-                            Language::Es => "Juego / Ventana:",
-                            Language::De => "Zielspiel / Fenster:",
-                            Language::Pt => "Jogo / Janela alvo:",
+                            Language::Fr => "Jeu cible :",
+                            Language::En => "Target Game:",
+                            Language::Es => "Juego objetivo:",
+                            Language::De => "Zielspiel:",
+                            Language::Pt => "Jogo alvo:",
                         })
                         .strong(),
                     );
@@ -256,6 +254,7 @@ impl StreamingView {
                             Language::De => "Laufende Spiele aktualisieren",
                             Language::Pt => "Atualizar jogos abertos",
                         })
+                        .on_hover_cursor(CursorIcon::PointingHand)
                         .clicked()
                     {
                         engine.refresh_running_games();
@@ -266,7 +265,7 @@ impl StreamingView {
                             Language::Fr => "Parcourir un jeu (.exe)...",
                             Language::En => "Browse game (.exe)...",
                             Language::Es => "Buscar juego (.exe)...",
-                            Language::De => "Spiel durchsuchen (.exe)...",
+                            Language::De => "Spiel wählen (.exe)...",
                             Language::Pt => "Procurar jogo (.exe)...",
                         })
                         .color(ModernTheme::BLUE_ELECTRIC)
@@ -276,7 +275,7 @@ impl StreamingView {
                     .stroke(Stroke::new(1.0_f32, ModernTheme::BLUE_ELECTRIC))
                     .rounding(Rounding::same(8.0));
 
-                    if ui.add(browse_btn).clicked() {
+                    if ui.add(browse_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                         engine.browse_game_executable();
                     }
                 });
@@ -292,18 +291,19 @@ impl StreamingView {
                             ui.horizontal(|ui| {
                                 ModernTheme::draw_dot(ui, ModernTheme::GREEN_VIVID, 4.0);
                                 ui.label(
-                                    RichText::new(format!("Exécutable sélectionné : {}", engine.custom_exe_path))
+                                    RichText::new(format!("Jeu sélectionné : {}", engine.custom_exe_path))
                                         .color(ModernTheme::TEXT_PRIMARY)
                                         .size(12.5),
                                 );
                                 if ui
                                     .button(match lang {
-                                        Language::Fr => "Lancer le jeu maintenant",
-                                        Language::En => "Launch game now",
-                                        Language::Es => "Iniciar juego ahora",
-                                        Language::De => "Spiel jetzt starten",
-                                        Language::Pt => "Iniciar jogo agora",
+                                        Language::Fr => "Lancer le jeu au premier plan",
+                                        Language::En => "Launch game in foreground",
+                                        Language::Es => "Iniciar juego en primer plano",
+                                        Language::De => "Spiel im Vordergrund starten",
+                                        Language::Pt => "Iniciar jogo em primeiro plano",
                                     })
+                                    .on_hover_cursor(CursorIcon::PointingHand)
                                     .clicked()
                                 {
                                     let _ = std::process::Command::new(&engine.custom_exe_path).spawn();
@@ -311,6 +311,22 @@ impl StreamingView {
                             });
                         });
                 }
+
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    ui.checkbox(
+                        &mut engine.capture_host.anti_audio_echo_enabled,
+                        RichText::new(match lang {
+                            Language::Fr => "Anti-Écho Audio Intelligent (Capture uniquement le son du jeu, exclut Discord / Micro)",
+                            Language::En => "Smart Audio Anti-Echo (Captures only game audio, excludes Discord / Voice Chat)",
+                            Language::Es => "Anti-Eco de Audio Inteligente (Solo captura el audio del juego, excluye Discord)",
+                            Language::De => "Intelligenter Audio-Echo-Schutz (Nur Spielton, schließt Discord/Sprachchat aus)",
+                            Language::Pt => "Anti-Eco de Áudio Inteligente (Captura apenas o som do jogo, exclui Discord)",
+                        })
+                        .color(ModernTheme::TEXT_PRIMARY)
+                        .strong(),
+                    );
+                });
             });
 
         ui.add_space(14.0);
@@ -341,7 +357,6 @@ impl StreamingView {
                 });
                 ui.add_space(8.0);
 
-                // Carte 1 : 2 à 4 Manettes
                 Self::render_input_mode_card(
                     ui,
                     engine.coop_input_mode == CoopInputMode::MultiGamepad,
@@ -362,13 +377,12 @@ impl StreamingView {
                     },
                     || {
                         engine.coop_input_mode = CoopInputMode::MultiGamepad;
-                        engine.moonlight_client.capture_mouse_keyboard = false;
+                        engine.stream_viewer.capture_mouse_keyboard = false;
                     },
                 );
 
                 ui.add_space(8.0);
 
-                // Carte 2 : 2 Claviers / Souris (Conversion intelligente en Manette J2)
                 Self::render_input_mode_card(
                     ui,
                     engine.coop_input_mode == CoopInputMode::KeyboardToVirtualGamepad,
@@ -389,13 +403,12 @@ impl StreamingView {
                     },
                     || {
                         engine.coop_input_mode = CoopInputMode::KeyboardToVirtualGamepad;
-                        engine.moonlight_client.capture_mouse_keyboard = false;
+                        engine.stream_viewer.capture_mouse_keyboard = false;
                     },
                 );
 
                 ui.add_space(8.0);
 
-                // Carte 3 : Clavier / Souris Partagé
                 Self::render_input_mode_card(
                     ui,
                     engine.coop_input_mode == CoopInputMode::SharedKeyboardMouse,
@@ -416,7 +429,7 @@ impl StreamingView {
                     },
                     || {
                         engine.coop_input_mode = CoopInputMode::SharedKeyboardMouse;
-                        engine.moonlight_client.capture_mouse_keyboard = true;
+                        engine.stream_viewer.capture_mouse_keyboard = true;
                     },
                 );
             });
@@ -438,11 +451,11 @@ impl StreamingView {
                             ModernTheme::draw_dot(ui, ModernTheme::BLUE_ELECTRIC, 5.0);
                             ui.label(
                                 RichText::new(match lang {
-                                    Language::Fr => "Étape 3 — Lancer la session d'écran partagé",
-                                    Language::En => "Step 3 — Start the shared screen session",
-                                    Language::Es => "Paso 3 — Iniciar la sesión de pantalla compartida",
-                                    Language::De => "Schritt 3 — Bildschirm-Sharing starten",
-                                    Language::Pt => "Passo 3 — Iniciar a sessão de ecrã partilhado",
+                                    Language::Fr => "Étape 3 — Lancer le partage du jeu au premier plan",
+                                    Language::En => "Step 3 — Start foreground game sharing",
+                                    Language::Es => "Paso 3 — Iniciar la transmisión del juego",
+                                    Language::De => "Schritt 3 — Spiel-Freigabe starten",
+                                    Language::Pt => "Passo 3 — Iniciar a partilha do jogo",
                                 })
                                 .color(ModernTheme::TEXT_PRIMARY)
                                 .strong()
@@ -451,8 +464,8 @@ impl StreamingView {
                         });
                         ui.label(
                             RichText::new(format!(
-                                "Source active : {}  |  GPU détecté : {}",
-                                engine.selected_app_name, engine.sunshine_host.detected_gpu_name
+                                "Jeu : {}  |  GPU : {}",
+                                engine.selected_app_name, engine.capture_host.detected_gpu_name
                             ))
                             .color(ModernTheme::TEXT_SECONDARY)
                             .size(13.0),
@@ -460,14 +473,14 @@ impl StreamingView {
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if !engine.sunshine_host.is_running {
+                        if !engine.capture_host.is_running {
                             let start_btn = egui::Button::new(
                                 RichText::new(match lang {
-                                    Language::Fr => "Démarrer le Partage d'Écran",
-                                    Language::En => "Start Screen Sharing",
-                                    Language::Es => "Iniciar Pantalla Compartida",
-                                    Language::De => "Bildschirmfreigabe starten",
-                                    Language::Pt => "Iniciar Partilha de Ecrã",
+                                    Language::Fr => "Démarrer le Partage du Jeu",
+                                    Language::En => "Start Game Sharing",
+                                    Language::Es => "Iniciar Compartir Juego",
+                                    Language::De => "Spiel-Freigabe starten",
+                                    Language::Pt => "Iniciar Partilha de Jogo",
                                 })
                                 .color(Color32::WHITE)
                                 .strong()
@@ -477,7 +490,7 @@ impl StreamingView {
                             .rounding(Rounding::same(10.0))
                             .min_size(egui::vec2(240.0, 44.0));
 
-                            if ui.add(start_btn).clicked() {
+                            if ui.add(start_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                 *on_start_host_stream = true;
                             }
                         } else {
@@ -485,7 +498,7 @@ impl StreamingView {
                                 RichText::new(match lang {
                                     Language::Fr => "Arrêter le Partage",
                                     Language::En => "Stop Sharing",
-                                    Language::Es => "Detener Pantalla Compartida",
+                                    Language::Es => "Detener",
                                     Language::De => "Freigabe beenden",
                                     Language::Pt => "Parar Partilha",
                                 })
@@ -497,7 +510,7 @@ impl StreamingView {
                             .rounding(Rounding::same(10.0))
                             .min_size(egui::vec2(200.0, 44.0));
 
-                            if ui.add(stop_btn).clicked() {
+                            if ui.add(stop_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                 *on_stop_host_stream = true;
                             }
                         }
@@ -508,14 +521,13 @@ impl StreamingView {
                 ui.separator();
                 ui.add_space(8.0);
 
-                // Résumé visuel des 4 emplacements de joueurs
                 ui.label(
                     RichText::new(match lang {
-                        Language::Fr => "Attribution automatique des joueurs sur votre PC :",
-                        Language::En => "Automatic player slot assignment on your PC:",
-                        Language::Es => "Asignación automática de jugadores en tu PC:",
-                        Language::De => "Automatische Spielerzuweisung auf deinem PC:",
-                        Language::Pt => "Atribuição automática de jogadores no seu PC:",
+                        Language::Fr => "Emplacements de joueurs actifs sur votre session :",
+                        Language::En => "Active player slots on your session:",
+                        Language::Es => "Ranuras de jugadores activas en tu sesión:",
+                        Language::De => "Aktive Spielerplätze in deiner Sitzung:",
+                        Language::Pt => "Lugares de jogadores ativos na sua sessão:",
                     })
                     .color(ModernTheme::TEXT_SECONDARY)
                     .strong()
@@ -526,7 +538,7 @@ impl StreamingView {
                 ui.columns(4, |cols| {
                     for slot_num in 1..=4 {
                         let existing = engine
-                            .sunshine_host
+                            .capture_host
                             .controller_slots
                             .iter()
                             .find(|s| s.player_number == slot_num);
@@ -573,7 +585,6 @@ impl StreamingView {
 
                 ui.add_space(10.0);
 
-                // Volet repliable pour ne pas perdre l'utilisateur avec les réglages techniques
                 ui.collapsing(
                     RichText::new(match lang {
                         Language::Fr => "Paramètres vidéo & manettes avancés (Optionnel)",
@@ -588,17 +599,17 @@ impl StreamingView {
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             ui.label("Qualité vidéo :");
-                            let is_1080 = engine.sunshine_host.target_height == 1080 && engine.sunshine_host.target_fps == 60;
+                            let is_1080 = engine.capture_host.target_height == 1080 && engine.capture_host.target_fps == 60;
                             if ui.selectable_label(is_1080, "1080p @ 60 FPS (Recommandé)").clicked() {
-                                engine.sunshine_host.target_width = 1920;
-                                engine.sunshine_host.target_height = 1080;
-                                engine.sunshine_host.target_fps = 60;
+                                engine.capture_host.target_width = 1920;
+                                engine.capture_host.target_height = 1080;
+                                engine.capture_host.target_fps = 60;
                             }
-                            let is_1440 = engine.sunshine_host.target_height == 1440 && engine.sunshine_host.target_fps == 120;
+                            let is_1440 = engine.capture_host.target_height == 1440 && engine.capture_host.target_fps == 120;
                             if ui.selectable_label(is_1440, "1440p @ 120 FPS (Ultra Fluide)").clicked() {
-                                engine.sunshine_host.target_width = 2560;
-                                engine.sunshine_host.target_height = 1440;
-                                engine.sunshine_host.target_fps = 120;
+                                engine.capture_host.target_width = 2560;
+                                engine.capture_host.target_height = 1440;
+                                engine.capture_host.target_fps = 120;
                             }
 
                             ui.add_space(16.0);
@@ -610,33 +621,33 @@ impl StreamingView {
                                 HardwareEncoder::Software,
                             ] {
                                 if ui
-                                    .selectable_label(engine.sunshine_host.active_encoder == enc, enc.display_name())
+                                    .selectable_label(engine.capture_host.active_encoder == enc, enc.display_name())
                                     .clicked()
                                 {
-                                    engine.sunshine_host.active_encoder = enc;
+                                    engine.capture_host.active_encoder = enc;
                                 }
                             }
                         });
 
                         ui.horizontal(|ui| {
-                            ui.label("Type de manette émulée pour les invités :");
+                            ui.label("Type de manette virtuelle :");
                             if ui
                                 .selectable_label(
-                                    engine.sunshine_host.default_gamepad_type == VirtualGamepadType::Xbox360,
+                                    engine.capture_host.default_gamepad_type == VirtualGamepadType::Xbox360,
                                     "Manette Xbox 360 (Compatible 100% des jeux PC)",
                                 )
                                 .clicked()
                             {
-                                engine.sunshine_host.default_gamepad_type = VirtualGamepadType::Xbox360;
+                                engine.capture_host.default_gamepad_type = VirtualGamepadType::Xbox360;
                             }
                             if ui
                                 .selectable_label(
-                                    engine.sunshine_host.default_gamepad_type == VirtualGamepadType::DualShock4,
+                                    engine.capture_host.default_gamepad_type == VirtualGamepadType::DualShock4,
                                     "Manette PlayStation DualShock 4",
                                 )
                                 .clicked()
                             {
-                                engine.sunshine_host.default_gamepad_type = VirtualGamepadType::DualShock4;
+                                engine.capture_host.default_gamepad_type = VirtualGamepadType::DualShock4;
                             }
                         });
                     },
@@ -698,7 +709,7 @@ impl StreamingView {
                     },
                     || {
                         engine.coop_input_mode = CoopInputMode::MultiGamepad;
-                        engine.moonlight_client.capture_mouse_keyboard = false;
+                        engine.stream_viewer.capture_mouse_keyboard = false;
                     },
                 );
 
@@ -724,7 +735,7 @@ impl StreamingView {
                     },
                     || {
                         engine.coop_input_mode = CoopInputMode::KeyboardToVirtualGamepad;
-                        engine.moonlight_client.capture_mouse_keyboard = false;
+                        engine.stream_viewer.capture_mouse_keyboard = false;
                     },
                 );
 
@@ -735,11 +746,11 @@ impl StreamingView {
                     engine.coop_input_mode == CoopInputMode::SharedKeyboardMouse,
                     ModernTheme::ORANGE_CORAL,
                     match lang {
-                        Language::Fr => "Utiliser mon Clavier & ma Souris en direct sur l'écran de l'hôte",
-                        Language::En => "Use my Keyboard & Mouse directly on the host's screen",
-                        Language::Es => "Usar mi Teclado y Ratón directamente en la pantalla del anfitrión",
-                        Language::De => "Meine Tastatur & Maus direkt auf dem Host-Bildschirm verwenden",
-                        Language::Pt => "Usar o meu Teclado e Rato diretamente no ecrã do anfitrião",
+                        Language::Fr => "Utiliser mon Clavier & ma Souris en direct sur le jeu de l'hôte",
+                        Language::En => "Use my Keyboard & Mouse directly on the host's game",
+                        Language::Es => "Usar mi Teclado y Ratón directamente en el juego del anfitrión",
+                        Language::De => "Meine Tastatur & Maus direkt im Spiel des Hosts verwenden",
+                        Language::Pt => "Usar o meu Teclado e Rato diretamente no jogo do anfitrião",
                     },
                     match lang {
                         Language::Fr => "Partage le même curseur de souris et le même clavier que l'hôte (idéal pour les jeux au tour par tour ou sur un seul clavier).",
@@ -750,7 +761,7 @@ impl StreamingView {
                     },
                     || {
                         engine.coop_input_mode = CoopInputMode::SharedKeyboardMouse;
-                        engine.moonlight_client.capture_mouse_keyboard = true;
+                        engine.stream_viewer.capture_mouse_keyboard = true;
                     },
                 );
             });
@@ -758,7 +769,7 @@ impl StreamingView {
         ui.add_space(14.0);
 
         // =========================================================================
-        // ÉTAPE 2 INVITÉ : REJOINDRE L'ÉCRAN EN 1 CLIC
+        // ÉTAPE 2 INVITÉ : REJOINDRE LE JEU EN 1 CLIC
         // =========================================================================
         egui::Frame::none()
             .fill(ModernTheme::CARD_BG)
@@ -772,11 +783,11 @@ impl StreamingView {
                             ModernTheme::draw_dot(ui, ModernTheme::INDIGO_ACCENT, 5.0);
                             ui.label(
                                 RichText::new(match lang {
-                                    Language::Fr => "Étape 2 — Rejoindre l'écran de jeu de l'hôte",
-                                    Language::En => "Step 2 — Join the host's game screen",
-                                    Language::Es => "Paso 2 — Unirse a la pantalla de juego del anfitrión",
-                                    Language::De => "Schritt 2 — Dem Spielbildschirm des Hosts beitreten",
-                                    Language::Pt => "Passo 2 — Juntar-se ao ecrã de jogo do anfitrião",
+                                    Language::Fr => "Étape 2 — Rejoindre le jeu de l'hôte",
+                                    Language::En => "Step 2 — Join the host's game",
+                                    Language::Es => "Paso 2 — Unirse al juego del anfitrión",
+                                    Language::De => "Schritt 2 — Dem Spiel des Hosts beitreten",
+                                    Language::Pt => "Passo 2 — Juntar-se ao jogo do anfitrião",
                                 })
                                 .color(ModernTheme::TEXT_PRIMARY)
                                 .strong()
@@ -784,24 +795,42 @@ impl StreamingView {
                             );
                         });
                         ui.label(
-                            RichText::new(format!(
-                                "Connexion directe P2P vers l'Hôte ({}) — Aucun code PIN requis.",
-                                engine.moonlight_client.target_host_vip
-                            ))
+                            RichText::new(match lang {
+                                Language::Fr => format!(
+                                    "Flux P2P chiffré de bout en bout vers l'Hôte ({})",
+                                    engine.stream_viewer.target_host_vip
+                                ),
+                                Language::En => format!(
+                                    "End-to-end encrypted P2P stream to Host ({})",
+                                    engine.stream_viewer.target_host_vip
+                                ),
+                                Language::Es => format!(
+                                    "Flujo P2P cifrado hacia el Anfitrión ({})",
+                                    engine.stream_viewer.target_host_vip
+                                ),
+                                Language::De => format!(
+                                    "Verschlüsselter P2P-Stream zum Host ({})",
+                                    engine.stream_viewer.target_host_vip
+                                ),
+                                Language::Pt => format!(
+                                    "Fluxo P2P encriptado para o Anfitrião ({})",
+                                    engine.stream_viewer.target_host_vip
+                                ),
+                            })
                             .color(ModernTheme::TEXT_SECONDARY)
                             .size(13.0),
                         );
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if !engine.moonlight_client.is_streaming {
+                        if !engine.stream_viewer.is_streaming {
                             let join_btn = egui::Button::new(
                                 RichText::new(match lang {
-                                    Language::Fr => "Rejoindre l'Écran de l'Hôte",
-                                    Language::En => "Join Host's Screen",
-                                    Language::Es => "Unirse a la Pantalla del Anfitrión",
-                                    Language::De => "Bildschirm des Hosts beitreten",
-                                    Language::Pt => "Juntar-se ao Ecrã do Anfitrião",
+                                    Language::Fr => "Rejoindre le Jeu de l'Hôte",
+                                    Language::En => "Join Host's Game",
+                                    Language::Es => "Unirse al Juego del Anfitrión",
+                                    Language::De => "Spiel des Hosts beitreten",
+                                    Language::Pt => "Juntar-se ao Jogo do Anfitrião",
                                 })
                                 .color(Color32::WHITE)
                                 .strong()
@@ -811,17 +840,17 @@ impl StreamingView {
                             .rounding(Rounding::same(10.0))
                             .min_size(egui::vec2(240.0, 44.0));
 
-                            if ui.add(join_btn).clicked() {
+                            if ui.add(join_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                 *on_start_client_stream = true;
                             }
                         } else {
                             let leave_btn = egui::Button::new(
                                 RichText::new(match lang {
-                                    Language::Fr => "Quitter l'Écran Partagé",
-                                    Language::En => "Leave Shared Screen",
-                                    Language::Es => "Salir de la Pantalla",
-                                    Language::De => "Bildschirm verlassen",
-                                    Language::Pt => "Sair do Ecrã Partilhado",
+                                    Language::Fr => "Quitter le Partage",
+                                    Language::En => "Leave Shared Game",
+                                    Language::Es => "Salir del Juego",
+                                    Language::De => "Spiel verlassen",
+                                    Language::Pt => "Sair da Partilha",
                                 })
                                 .color(Color32::WHITE)
                                 .strong()
@@ -831,7 +860,7 @@ impl StreamingView {
                             .rounding(Rounding::same(10.0))
                             .min_size(egui::vec2(210.0, 44.0));
 
-                            if ui.add(leave_btn).clicked() {
+                            if ui.add(leave_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                 *on_stop_client_stream = true;
                             }
                         }
@@ -843,31 +872,31 @@ impl StreamingView {
                     ui.label("Affichage :");
                     if ui
                         .selectable_label(
-                            engine.moonlight_client.display_mode == StreamDisplayMode::BorderlessFullscreen,
+                            engine.stream_viewer.display_mode == StreamDisplayMode::BorderlessFullscreen,
                             "Plein écran sans bordure (Immersion)",
                         )
                         .clicked()
                     {
-                        engine.moonlight_client.display_mode = StreamDisplayMode::BorderlessFullscreen;
+                        engine.stream_viewer.display_mode = StreamDisplayMode::BorderlessFullscreen;
                     }
                     if ui
                         .selectable_label(
-                            engine.moonlight_client.display_mode == StreamDisplayMode::EmbeddedWindowed,
+                            engine.stream_viewer.display_mode == StreamDisplayMode::EmbeddedWindowed,
                             "Mode Fenêtré",
                         )
                         .clicked()
                     {
-                        engine.moonlight_client.display_mode = StreamDisplayMode::EmbeddedWindowed;
+                        engine.stream_viewer.display_mode = StreamDisplayMode::EmbeddedWindowed;
                     }
 
                     ui.add_space(16.0);
                     ui.label("Décodage matériel :");
                     for codec in [VideoCodec::Hevc, VideoCodec::Av1, VideoCodec::H264] {
                         if ui
-                            .selectable_label(engine.moonlight_client.preferred_codec == codec, codec.label())
+                            .selectable_label(engine.stream_viewer.preferred_codec == codec, codec.label())
                             .clicked()
                         {
-                            engine.moonlight_client.preferred_codec = codec;
+                            engine.stream_viewer.preferred_codec = codec;
                         }
                     }
                 });
@@ -922,7 +951,8 @@ impl StreamingView {
                 });
             })
             .response
-            .interact(egui::Sense::click());
+            .interact(egui::Sense::click())
+            .on_hover_cursor(CursorIcon::PointingHand);
 
         if resp.clicked() {
             on_select();

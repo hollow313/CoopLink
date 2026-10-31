@@ -13,6 +13,10 @@ fn default_instance_uuid() -> u64 {
     rand::random::<u64>() % 900_000 + 100_000
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub player_name: String,
@@ -33,6 +37,10 @@ pub struct AppConfig {
     pub instance_uuid: u64,
     #[serde(default)]
     pub language: Language,
+    #[serde(default = "default_true")]
+    pub close_to_background: bool,
+    #[serde(default)]
+    pub start_with_windows: bool,
     pub room_password: String,
     pub scanline_intensity: f32,
 }
@@ -43,7 +51,7 @@ impl Default for AppConfig {
         Self {
             player_name: format!("Player_{}", random_suffix),
             listen_port: 42422,
-            target_metric: 5, // Métrique ultra-basse : prend la priorité sur Wi-Fi (35-50) et Ethernet (25)
+            target_metric: 5,
             virtual_subnet_prefix: "10.244.0".to_string(),
             host_virtual_ip: Ipv4Addr::new(10, 244, 0, 1),
             mtu: 1420,
@@ -55,7 +63,9 @@ impl Default for AppConfig {
             remote_server_address: "127.0.0.1:42422".to_string(),
             central_server_address: default_central_server(),
             instance_uuid: default_instance_uuid(),
-            language: Language::Fr,
+            language: Language::from_os_locale(),
+            close_to_background: true,
+            start_with_windows: false,
             room_password: String::new(),
             scanline_intensity: 0.15,
         }

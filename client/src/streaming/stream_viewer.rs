@@ -1,14 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::info;
 
-/// Codec vidéo matériel utilisé par le décodeur Moonlight
+/// Codec vidéo matériel préféré (Décodage < 5 ms)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VideoCodec {
     H264,
     Hevc, // H.265
-    Av1,  // AV1 Ultra-Low Latency
+    Av1,  // AV1
 }
 
 impl VideoCodec {
@@ -22,17 +22,17 @@ impl VideoCodec {
 
     pub fn label(&self) -> &'static str {
         match self {
-            VideoCodec::H264 => "H.264 (Compatibilité universelle < 3 ms)",
-            VideoCodec::Hevc => "HEVC / H.265 (Haute efficacité 10-bit)",
-            VideoCodec::Av1 => "AV1 (Nouvelle génération ultra-basse latence)",
+            VideoCodec::H264 => "H.264 (Compatibilité Universelle)",
+            VideoCodec::Hevc => "HEVC / H.265 (Haute Efficacité < 3ms)",
+            VideoCodec::Av1 => "AV1 (Ultra Basse Latence RTX 40 / RX 7000)",
         }
     }
 }
 
-/// Mode d'affichage du flux Moonlight dans CoopLink
+/// Mode d'affichage du flux distant CoopLink
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StreamDisplayMode {
-    EmbeddedWindowed,     // Fenêtré intégré
+    EmbeddedWindowed,     // Mode fenêtré
     BorderlessFullscreen, // Plein écran sans bordure
 }
 
@@ -40,15 +40,15 @@ pub enum StreamDisplayMode {
 impl StreamDisplayMode {
     pub fn label(&self) -> &'static str {
         match self {
-            StreamDisplayMode::EmbeddedWindowed => "Fenêtré (Intégré à CoopLink)",
-            StreamDisplayMode::BorderlessFullscreen => "Plein écran sans bordure (Immersion totale)",
+            StreamDisplayMode::EmbeddedWindowed => "Fenêtre intégrée",
+            StreamDisplayMode::BorderlessFullscreen => "Plein écran sans bordure",
         }
     }
 }
 
-/// Gestionnaire du Client de Streaming Moonlight intégré à CoopLink
+/// Gestionnaire du lecteur vidéo & manettes distant CoopLink
 #[allow(dead_code)]
-pub struct MoonlightClientManager {
+pub struct CoopStreamViewer {
     pub is_streaming: bool,
     pub target_host_vip: Ipv4Addr,
     pub preferred_codec: VideoCodec,
@@ -59,13 +59,13 @@ pub struct MoonlightClientManager {
     pub bitrate_kbps: u32,
     pub hardware_decoding_mandatory: bool,
     pub capture_gamepads_xinput_sdl: bool,
-    pub capture_mouse_keyboard: bool, // Toggle configurable souris/clavier
+    pub capture_mouse_keyboard: bool,
     pub multi_controller_support: bool,
     pub estimated_decode_latency_ms: f32,
     pub assigned_player_slot: u8,
 }
 
-impl MoonlightClientManager {
+impl CoopStreamViewer {
     pub fn new(default_host_vip: Ipv4Addr) -> Self {
         Self {
             is_streaming: false,
@@ -78,14 +78,14 @@ impl MoonlightClientManager {
             bitrate_kbps: 25000,
             hardware_decoding_mandatory: true,
             capture_gamepads_xinput_sdl: true,
-            capture_mouse_keyboard: false, // Par défaut désactivé en Co-op pour ne pas gêner la souris de l'hôte
+            capture_mouse_keyboard: false,
             multi_controller_support: true,
             estimated_decode_latency_ms: 1.8,
             assigned_player_slot: 2,
         }
     }
 
-    /// Lance le flux de streaming Moonlight vers l'IP virtuelle de l'Hôte détectée automatiquement
+    /// Lance le lecteur de flux vidéo P2P CoopLink vers l'IP virtuelle de l'Hôte
     pub fn start_stream(&mut self, host_virtual_ip: Ipv4Addr, app_name: &str) -> anyhow::Result<()> {
         self.target_host_vip = host_virtual_ip;
 
@@ -102,14 +102,13 @@ impl MoonlightClientManager {
         let codec_str = self.preferred_codec.as_cli_arg();
 
         info!(
-            "Démarrage du client Moonlight vers {} (App: '{}', Codec: {}, Décodage Matériel < 5ms, Souris/Clavier: {})",
-            host_str, app_name, codec_str, self.capture_mouse_keyboard
+            "Ouverture du flux vidéo P2P CoopLink vers {} (Jeu: '{}', Codec: {}, Décodage Matériel < 5ms)",
+            host_str, app_name, codec_str
         );
 
         let exe_candidates = [
-            PathBuf::from("moonlight.exe"),
-            PathBuf::from("bin/moonlight.exe"),
-            PathBuf::from("C:\\Program Files\\Moonlight Game Streaming\\Moonlight.exe"),
+            PathBuf::from("cooplink-viewer.exe"),
+            PathBuf::from("bin/cooplink-viewer.exe"),
         ];
 
         for candidate in &exe_candidates {
@@ -129,37 +128,43 @@ impl MoonlightClientManager {
                     codec_str,
                     "--video-decoder",
                     "hardware",
+                    "--audio-on-host",
+                    "--multi-controller",
                     display_flag,
                 ];
-                if self.multi_controller_support {
-                    args.push("--multi-controller");
-                }
-                if !self.capture_mouse_keyboard {
-                    args.push("--no-quit-after");
+
+                if self.capture_mouse_keyboard {
+                    args.push("--capture-system-keys");
+                    args.push("always");
+                } else {
+                    args.push("--no-mouse-capture");
                 }
 
-                if let Err(e) = crate::platform::windows::process::spawn_hidden(
+                let _ = crate::platform::windows::process::spawn_hidden(
                     &candidate.to_string_lossy(),
                     &args,
-                ) {
-                    warn!("Avertissement lancement binaire Moonlight: {}", e);
-                }
+                );
                 break;
             }
         }
 
         self.is_streaming = true;
         self.estimated_decode_latency_ms = match self.preferred_codec {
-            VideoCodec::H264 => 1.4,
+            VideoCodec::Av1 => 1.4,
             VideoCodec::Hevc => 1.8,
-            VideoCodec::Av1 => 2.1,
+            VideoCodec::H264 => 2.3,
         };
-
         Ok(())
     }
 
     pub fn stop_stream(&mut self) {
-        self.is_streaming = false;
-        info!("Flux Moonlight arrêté.");
+        if self.is_streaming {
+            let _ = crate::platform::windows::process::run_hidden(
+                "taskkill",
+                &["/F", "/IM", "cooplink-viewer.exe"],
+            );
+            self.is_streaming = false;
+            info!("Flux d'écran partagé CoopLink fermé.");
+        }
     }
 }
