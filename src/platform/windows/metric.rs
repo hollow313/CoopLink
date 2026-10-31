@@ -1,5 +1,5 @@
+use super::process::{run_hidden, run_hidden_powershell};
 use anyhow::Result;
-use std::process::Command;
 use tracing::{info, warn};
 
 #[allow(dead_code)]
@@ -11,31 +11,29 @@ pub struct InterfaceMetricInfo {
     pub ip_address: Option<String>,
 }
 
-/// Applique une métrique basse personnalisée à l'interface CoopLink
+/// Applique une métrique basse personnalisée à l'interface CoopLink (100% invisible en arrière-plan)
 pub fn set_adapter_metric(adapter_name: &str, target_metric: u32) -> Result<()> {
     info!(
-        "Application de la métrique basse ({}) sur l'interface '{}'...",
+        "Application silencieuse de la métrique basse ({}) sur l'interface '{}'...",
         target_metric, adapter_name
     );
 
-    // Méthode 1 : PowerShell Set-NetIPInterface (Windows 10/11 standard)
+    // Méthode 1 : PowerShell Set-NetIPInterface discret
     let ps_cmd = format!(
         "Get-NetIPInterface | Where-Object {{ $_.InterfaceAlias -eq '{0}' -or $_.InterfaceDescription -like '*{0}*' }} | ForEach-Object {{ Set-NetIPInterface -InterfaceIndex $_.InterfaceIndex -InterfaceMetric {1} }}",
         adapter_name, target_metric
     );
 
-    let output = Command::new("powershell")
-        .args(&["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
-        .output();
+    let output = run_hidden_powershell(&ps_cmd);
 
     let ps_success = match output {
         Ok(out) => {
             if out.status.success() {
-                info!("Métrique appliquée avec succès via PowerShell Set-NetIPInterface !");
+                info!("Métrique appliquée avec succès via PowerShell discret !");
                 true
             } else {
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                warn!("PowerShell Set-NetIPInterface a retourné: {}", stderr);
+                warn!("PowerShell discret a retourné: {}", stderr);
                 false
             }
         }
@@ -45,23 +43,24 @@ pub fn set_adapter_metric(adapter_name: &str, target_metric: u32) -> Result<()> 
         }
     };
 
-    // Méthode 2 : Repli avec netsh si nécessaire
+    // Méthode 2 : Repli avec netsh sans fenêtre si nécessaire
     if !ps_success {
-        info!("Tentative de repli via netsh...");
-        let netsh_status = Command::new("netsh")
-            .args(&[
+        info!("Tentative de repli via netsh discret...");
+        let netsh_status = run_hidden(
+            "netsh",
+            &[
                 "interface",
                 "ipv4",
                 "set",
                 "interface",
                 &format!("\"{}\"", adapter_name),
                 &format!("metric={}", target_metric),
-            ])
-            .status();
+            ],
+        );
 
         if let Ok(st) = netsh_status {
-            if st.success() {
-                info!("Métrique appliquée avec succès via netsh !");
+            if st.status.success() {
+                info!("Métrique appliquée avec succès via netsh discret !");
                 return Ok(());
             }
         }
@@ -70,15 +69,12 @@ pub fn set_adapter_metric(adapter_name: &str, target_metric: u32) -> Result<()> 
     Ok(())
 }
 
-/// Récupère la liste des interfaces réseau avec leurs métriques
+/// Récupère la liste des interfaces réseau avec leurs métriques (100% silencieux)
 pub fn get_network_interfaces() -> Vec<InterfaceMetricInfo> {
     let mut interfaces = Vec::new();
 
     let ps_cmd = "Get-NetIPInterface -AddressFamily IPv4 | Select-Object InterfaceAlias, InterfaceIndex, InterfaceMetric | ConvertTo-Json";
-    if let Ok(output) = Command::new("powershell")
-        .args(&["-NoProfile", "-NonInteractive", "-Command", ps_cmd])
-        .output()
-    {
+    if let Ok(output) = run_hidden_powershell(ps_cmd) {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&stdout) {

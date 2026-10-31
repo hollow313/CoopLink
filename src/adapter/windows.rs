@@ -1,8 +1,8 @@
 use super::VirtualAdapter;
 use crate::platform::windows::metric::set_adapter_metric;
+use crate::platform::windows::process::run_hidden;
 use anyhow::Result;
 use std::net::Ipv4Addr;
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -54,31 +54,53 @@ impl VirtualAdapter for WindowsVirtualAdapter {
             name, ip, subnet_mask, metric
         );
 
-        // Configuration IP & Sous-réseau via netsh ou PowerShell
-        let netsh_cmd = format!(
-            "netsh interface ipv4 set address name=\"{}\" static {} {} none",
-            name, ip, subnet_mask
+        // Configuration IP & Sous-réseau via netsh discret (sans aucune console CMD)
+        let _ = run_hidden(
+            "netsh",
+            &[
+                "interface",
+                "ipv4",
+                "set",
+                "address",
+                &format!("name=\"{}\"", name),
+                "static",
+                &ip.to_string(),
+                &subnet_mask.to_string(),
+                "none",
+            ],
         );
-        let _ = Command::new("cmd").args(&["/C", &netsh_cmd]).output();
 
-        // Configuration du MTU
-        let mtu_cmd = format!(
-            "netsh interface ipv4 set subinterface \"{}\" mtu={} store=persistent",
-            name, mtu
+        // Configuration du MTU discret
+        let _ = run_hidden(
+            "netsh",
+            &[
+                "interface",
+                "ipv4",
+                "set",
+                "subinterface",
+                &format!("\"{}\"", name),
+                &format!("mtu={}", mtu),
+                "store=persistent",
+            ],
         );
-        let _ = Command::new("cmd").args(&["/C", &mtu_cmd]).output();
 
         // Application de la métrique basse demandée
         let _ = set_adapter_metric(name, metric);
 
-        // Ajout de la route vers le sous-réseau virtuel avec métrique basse
-        let route_cmd = format!(
-            "route add {}.0 mask 255.255.255.0 {} metric {}",
-            ip.octets()[0..3].iter().map(|o| o.to_string()).collect::<Vec<_>>().join("."),
-            ip,
-            metric
+        // Ajout de la route vers le sous-réseau virtuel avec métrique basse de façon discrète
+        let subnet_prefix = format!("{}.0", ip.octets()[0..3].iter().map(|o| o.to_string()).collect::<Vec<_>>().join("."));
+        let _ = run_hidden(
+            "route",
+            &[
+                "add",
+                &subnet_prefix,
+                "mask",
+                "255.255.255.0",
+                &ip.to_string(),
+                "metric",
+                &metric.to_string(),
+            ],
         );
-        let _ = Command::new("cmd").args(&["/C", &route_cmd]).output();
 
         self.connected.store(true, Ordering::SeqCst);
         info!("Adaptateur Windows configuré avec succès ! Métrique basse activée pour priorité LAN.");
