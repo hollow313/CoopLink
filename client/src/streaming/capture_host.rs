@@ -31,6 +31,43 @@ impl HardwareEncoder {
             HardwareEncoder::Software => "Encodage CPU Standard",
         }
     }
+
+    pub fn short_badge(&self) -> &'static str {
+        match self {
+            HardwareEncoder::Nvenc => "Matériel GPU (NVIDIA NVENC)",
+            HardwareEncoder::Amf => "Matériel GPU (AMD AMF)",
+            HardwareEncoder::QuickSync => "Matériel GPU (Intel QuickSync)",
+            HardwareEncoder::Software => "Standard CPU",
+        }
+    }
+
+    pub fn is_hardware(&self) -> bool {
+        !matches!(self, HardwareEncoder::Software)
+    }
+}
+
+/// Mode d'isolation et de capture audio avancé (Zéro Écho)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AudioCaptureMode {
+    /// Capture exclusivement le flux audio WASAPI Process Loopback de l'exécutable du jeu choisi (0% écho Discord/Micro)
+    ExclusiveGameProcessOnly,
+    /// Capture le périphérique audio principal en filtrant les processus de chat vocal (Discord, TeamSpeak, Steam Voice)
+    FilteredSystemAudio,
+    /// Capture un périphérique de sortie audio spécifique sélectionné par l'utilisateur
+    SpecificAudioDevice,
+    /// Coupe totalement l'envoi du son vers les invités
+    Muted,
+}
+
+impl AudioCaptureMode {
+    pub fn as_conf_str(&self) -> &'static str {
+        match self {
+            AudioCaptureMode::ExclusiveGameProcessOnly => "exclusive_game_process_loopback",
+            AudioCaptureMode::FilteredSystemAudio => "filtered_system_loopback_no_voice",
+            AudioCaptureMode::SpecificAudioDevice => "specific_audio_endpoint",
+            AudioCaptureMode::Muted => "muted",
+        }
+    }
 }
 
 /// Type de manette virtuelle émulée par le bus CoopLink
@@ -69,12 +106,29 @@ pub struct ControllerSlotAssignment {
     pub xinput_slot_index: u8, // 0..3
 }
 
+/// Vérifie si un nom d'adaptateur vidéo correspond à un écran virtuel (et non à un GPU physique)
+pub fn is_virtual_display_adapter_name(name: &str) -> bool {
+    let u = name.to_uppercase();
+    u.contains("SUDOMAKER")
+        || u.contains("VIRTUAL DISPLAY")
+        || u.contains("VIRTUAL MONITOR")
+        || u.contains("PARSEC")
+        || u.contains("IDDSAMPLE")
+        || u.contains("INDIRECT DISPLAY")
+        || u.contains("MICROSOFT BASIC")
+        || u.contains("SPACEDESK")
+        || u.contains("CITRIX")
+        || u.contains("REMOTE DESKTOP")
+}
+
 /// Gestionnaire du service Hôte de Capture & Partage de Jeu CoopLink
 #[allow(dead_code)]
 pub struct CoopCaptureHost {
     pub is_running: bool,
     pub bound_virtual_ip: Ipv4Addr,
     pub detected_gpu_name: String,
+    pub available_physical_gpus: Vec<String>,
+    pub detected_virtual_display_name: Option<String>,
     pub active_encoder: HardwareEncoder,
     pub target_width: u32,
     pub target_height: u32,
@@ -82,8 +136,16 @@ pub struct CoopCaptureHost {
     pub dynamic_bitrate_kbps: u32,
     pub virtual_gamepad_driver_ready: bool,
     pub virtual_display_driver_ready: bool,
+    // Options Audio Avancées (Isolation stricte du son du jeu)
     pub anti_audio_echo_enabled: bool,
+    pub audio_capture_mode: AudioCaptureMode,
+    pub exclude_voice_chat_apps: bool,
+    pub acoustic_echo_cancellation: bool,
+    pub stream_audio_volume: u32,
+    pub selected_audio_device: String,
+    pub available_audio_devices: Vec<String>,
     pub foreground_game_only: bool,
+    pub auto_optimized_mode: bool,
     pub default_gamepad_type: VirtualGamepadType,
     pub controller_slots: Vec<ControllerSlotAssignment>,
     pub service_port: u16,
@@ -92,19 +154,32 @@ pub struct CoopCaptureHost {
 #[allow(dead_code)]
 impl CoopCaptureHost {
     pub fn new(host_virtual_ip: Ipv4Addr) -> Self {
+        let default_audio_dev = "Sortie Audio DirectX du Jeu (Isolation Processus)".to_string();
         let mut mgr = Self {
             is_running: false,
             bound_virtual_ip: host_virtual_ip,
-            detected_gpu_name: "GPU DirectX 12".to_string(),
+            detected_gpu_name: "Carte Graphique Matérielle DirectX 12".to_string(),
+            available_physical_gpus: Vec::new(),
+            detected_virtual_display_name: None,
             active_encoder: HardwareEncoder::Nvenc,
             target_width: 1920,
             target_height: 1080,
             target_fps: 60,
-            dynamic_bitrate_kbps: 25000,
+            dynamic_bitrate_kbps: 30000,
             virtual_gamepad_driver_ready: true,
             virtual_display_driver_ready: true,
-            anti_audio_echo_enabled: true, // Anti-écho audio actif par défaut (isole l'audio du jeu sans capter Discord/Voix)
-            foreground_game_only: true,    // Ne capture que le jeu au premier plan (CoopLink reste en arrière-plan)
+            anti_audio_echo_enabled: true,
+            audio_capture_mode: AudioCaptureMode::ExclusiveGameProcessOnly,
+            exclude_voice_chat_apps: true,
+            acoustic_echo_cancellation: true,
+            stream_audio_volume: 100,
+            selected_audio_device: default_audio_dev.clone(),
+            available_audio_devices: vec![
+                default_audio_dev,
+                "Casque / Haut-parleurs Principaux (Sans Discord)".to_string(),
+            ],
+            foreground_game_only: true,
+            auto_optimized_mode: true,
             default_gamepad_type: VirtualGamepadType::Xbox360,
             controller_slots: vec![ControllerSlotAssignment {
                 player_number: 1,
@@ -121,28 +196,125 @@ impl CoopCaptureHost {
         mgr
     }
 
-    /// Détecte le GPU matériel et les pilotes virtuels (Affichage & Bus Manettes)
+    /// Détecte les vrais GPU matériels (en filtrant les écrans virtuels comme SudoMaker Virtual Display Adapter)
+    /// ainsi que les périphériques audio disponibles.
     pub fn detect_hardware_capabilities(&mut self) {
         let ps_cmd = "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name";
         if let Ok(output) = crate::platform::windows::process::run_hidden_powershell(ps_cmd) {
             if output.status.success() {
-                let names = String::from_utf8_lossy(&output.stdout);
-                let first_gpu = names.lines().next().unwrap_or("GPU DirectX 12").trim();
-                if !first_gpu.is_empty() {
-                    self.detected_gpu_name = first_gpu.to_string();
+                let raw = String::from_utf8_lossy(&output.stdout);
+                let mut physical_gpus = Vec::new();
+                let mut virtual_disp = None;
+
+                for line in raw.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if is_virtual_display_adapter_name(trimmed) {
+                        virtual_disp = Some(trimmed.to_string());
+                    } else if !physical_gpus.contains(&trimmed.to_string()) {
+                        physical_gpus.push(trimmed.to_string());
+                    }
                 }
-                let upper = names.to_uppercase();
-                if upper.contains("NVIDIA") || upper.contains("GEFORCE") || upper.contains("RTX") || upper.contains("GTX") {
+
+                self.detected_virtual_display_name = virtual_disp.clone();
+
+                // Choisir en priorité une carte dédiée NVIDIA ou AMD, sinon Intel, sinon le premier GPU physique
+                let preferred_physical = physical_gpus
+                    .iter()
+                    .find(|g| {
+                        let u = g.to_uppercase();
+                        u.contains("NVIDIA") || u.contains("RTX") || u.contains("GTX") || u.contains("RADEON") || u.contains("AMD")
+                    })
+                    .or_else(|| physical_gpus.first())
+                    .cloned();
+
+                if let Some(phys) = preferred_physical {
+                    self.detected_gpu_name = phys;
+                } else if let Some(vdd) = virtual_disp {
+                    // Si la machine ne remonte que l'adaptateur virtuel dans Win32_VideoController,
+                    // on conserve l'accélération matérielle DirectX 12 sous-jacente
+                    self.detected_gpu_name = format!("GPU Matériel DirectX 12 ({})", vdd);
+                }
+
+                self.available_physical_gpus = physical_gpus;
+
+                let all_upper = raw.to_uppercase();
+                let gpu_upper = self.detected_gpu_name.to_uppercase();
+                if all_upper.contains("NVIDIA")
+                    || all_upper.contains("GEFORCE")
+                    || all_upper.contains("RTX")
+                    || all_upper.contains("GTX")
+                {
                     self.active_encoder = HardwareEncoder::Nvenc;
-                } else if upper.contains("AMD") || upper.contains("RADEON") {
+                } else if all_upper.contains("AMD") || all_upper.contains("RADEON") {
                     self.active_encoder = HardwareEncoder::Amf;
-                } else if upper.contains("INTEL") || upper.contains("ARC") || upper.contains("IRIS") {
+                } else if all_upper.contains("INTEL") || all_upper.contains("ARC") || all_upper.contains("IRIS") || all_upper.contains("UHD") {
                     self.active_encoder = HardwareEncoder::QuickSync;
+                } else if gpu_upper.contains("DIRECTX 12") {
+                    // Par défaut sur Windows 11 avec écran virtuel SudoMaker, l'encodeur matériel GPU hôte est actif
+                    self.active_encoder = HardwareEncoder::Nvenc;
                 } else {
                     self.active_encoder = HardwareEncoder::Software;
                 }
             }
         }
+
+        // Détection silencieuse des périphériques audio Windows
+        let ps_audio = "Get-CimInstance Win32_SoundDevice | Select-Object -ExpandProperty Name";
+        if let Ok(out) = crate::platform::windows::process::run_hidden_powershell(ps_audio) {
+            if out.status.success() {
+                let raw_audio = String::from_utf8_lossy(&out.stdout);
+                for line in raw_audio.lines() {
+                    let dev = line.trim();
+                    if !dev.is_empty() && !self.available_audio_devices.contains(&dev.to_string()) {
+                        self.available_audio_devices.push(dev.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Applique en 1 clic la Configuration Auto / Optimisée selon le débit montant mesuré et le GPU
+    pub fn apply_auto_optimized_profile(&mut self, upload_mbps: f32) {
+        self.auto_optimized_mode = true;
+        // Toujours activer l'encodeur matériel GPU s'il était sur Software par erreur
+        if self.active_encoder == HardwareEncoder::Software {
+            let u = self.detected_gpu_name.to_uppercase();
+            if u.contains("AMD") || u.contains("RADEON") {
+                self.active_encoder = HardwareEncoder::Amf;
+            } else if u.contains("INTEL") || u.contains("ARC") || u.contains("IRIS") {
+                self.active_encoder = HardwareEncoder::QuickSync;
+            } else {
+                self.active_encoder = HardwareEncoder::Nvenc;
+            }
+        }
+
+        // Adaptation intelligente Résolution / FPS / Bitrate selon le débit montant mesuré
+        if upload_mbps >= 45.0 {
+            self.target_width = 1920;
+            self.target_height = 1080;
+            self.target_fps = 60;
+            self.dynamic_bitrate_kbps = 35000;
+        } else if upload_mbps >= 20.0 {
+            self.target_width = 1920;
+            self.target_height = 1080;
+            self.target_fps = 60;
+            self.dynamic_bitrate_kbps = 22000;
+        } else {
+            self.target_width = 1280;
+            self.target_height = 720;
+            self.target_fps = 60;
+            self.dynamic_bitrate_kbps = 12000;
+        }
+
+        // Isolation audio stricte du jeu par défaut pour éviter tout écho
+        self.anti_audio_echo_enabled = true;
+        self.audio_capture_mode = AudioCaptureMode::ExclusiveGameProcessOnly;
+        self.exclude_voice_chat_apps = true;
+        self.acoustic_echo_cancellation = true;
+        self.foreground_game_only = true;
     }
 
     /// Adapte dynamiquement le débit vidéo selon la latence mesurée sur le tunnel P2P CoopLink
@@ -206,8 +378,11 @@ impl CoopCaptureHost {
              fec_percentage = 20\n\
              min_threads = 2\n\
              channels = 2\n\
-             audio_isolation_mode = process_loopback_no_echo\n\
-             exclude_voice_chat_audio = enabled\n\
+             audio_isolation_mode = {}\n\
+             audio_target_device = {}\n\
+             audio_volume_percent = {}\n\
+             exclude_voice_chat_audio = {}\n\
+             acoustic_echo_cancellation = {}\n\
              capture_mode = foreground_game_window_only\n\
              target_executable = {}\n\
              origin_web_ui_allowed = pc\n",
@@ -215,6 +390,11 @@ impl CoopCaptureHost {
             self.bound_virtual_ip,
             self.active_encoder.as_engine_str(),
             self.default_gamepad_type.as_engine_str(),
+            self.audio_capture_mode.as_conf_str(),
+            self.selected_audio_device,
+            self.stream_audio_volume,
+            if self.exclude_voice_chat_apps { "enabled" } else { "disabled" },
+            if self.acoustic_echo_cancellation { "enabled" } else { "disabled" },
             target_game_exe
         );
 
@@ -228,9 +408,10 @@ impl CoopCaptureHost {
         let conf_path = self.write_isolated_config(target_game_exe);
 
         info!(
-            "Démarrage du moteur de capture CoopLink lié à {} (Encodeur: {}, Anti-Écho Audio: Actif, Jeu Premier Plan uniquement)",
+            "Démarrage du moteur de capture CoopLink lié à {} (Encodeur: {}, Mode Audio: {}, Jeu Premier Plan uniquement)",
             self.bound_virtual_ip,
-            self.active_encoder.display_name()
+            self.active_encoder.display_name(),
+            self.audio_capture_mode.as_conf_str()
         );
 
         let exe_candidates = [

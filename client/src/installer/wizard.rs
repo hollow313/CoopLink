@@ -2,7 +2,6 @@ use super::actions::*;
 use eframe::egui;
 use egui::{Color32, CursorIcon, FontFamily, FontId, RichText, Rounding, ScrollArea, Stroke, TextStyle, Ui};
 use std::env;
-use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -377,7 +376,12 @@ impl eframe::App for InstallerApp {
                                 if ui.add(finish_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                     if self.launch_on_finish {
                                         let exe_path = PathBuf::from(&self.install_dir).join("cooplink.exe");
-                                        let _ = launch_installed_cooplink(&exe_path);
+                                        if exe_path.exists() {
+                                            let _ = launch_installed_cooplink(&exe_path);
+                                        } else {
+                                            let fallback_exe = get_user_local_install_dir().join("cooplink.exe");
+                                            let _ = launch_installed_cooplink(&fallback_exe);
+                                        }
                                     }
                                     std::process::exit(0);
                                 }
@@ -654,18 +658,27 @@ impl InstallerApp {
 
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Dossier :").color(WIN11_TEXT_MAIN).strong());
-                ui.add(egui::TextEdit::singleline(&mut self.install_dir).desired_width(430.0));
+                ui.add(egui::TextEdit::singleline(&mut self.install_dir).desired_width(360.0));
+                if ui.button("Program Files").clicked() {
+                    self.install_dir = get_default_install_dir().to_string_lossy().to_string();
+                }
+                if ui.button("AppData Local").clicked() {
+                    self.install_dir = get_user_local_install_dir().to_string_lossy().to_string();
+                }
             });
 
-            ui.add_space(16.0);
+            ui.add_space(12.0);
             egui::Frame::none()
                 .fill(WIN11_SUBTLE)
                 .stroke(Stroke::new(1.0_f32, WIN11_BORDER))
                 .inner_margin(12.0)
                 .rounding(Rounding::same(8.0))
                 .show(ui, |ui| {
-                    ui.label("Espace disque requis : ~25 Mo (incluant les pilotes virtuels)");
-                    ui.label("Système cible : Windows 11 (64 bits)");
+                    ui.label(RichText::new("Architecture logicielle complète installée :").strong().color(WIN11_BLUE));
+                    ui.label("• cooplink.exe & unins000.exe (Application principale & Désinstalleur)");
+                    ui.label("• bin\\ (cooplink-capture-service.exe, cooplink-stream-viewer.exe, moteurs DLL)");
+                    ui.label("• drivers\\ (Pilotes Bus Manettes 4 Joueurs, Affichage Virtuel & LAN P2P)");
+                    ui.label("• config\\, resources\\, locales\\, LICENSE.txt & README.txt");
                 });
         });
     }
@@ -855,25 +868,23 @@ impl InstallerApp {
         let complete_flag = self.install_complete.clone();
 
         thread::spawn(move || {
-            let _ = fs::create_dir_all(&target_dir);
-            thread::sleep(Duration::from_millis(200));
-
             let current_exe = env::current_exe().unwrap_or_default();
             let source_cooplink = current_exe
                 .parent()
                 .map(|p| p.join("cooplink.exe"))
                 .unwrap_or_else(|| PathBuf::from("cooplink.exe"));
 
-            let target_exe = target_dir.join("cooplink.exe");
+            let hw_info = check_system_drivers();
+            let effective_dir = populate_complete_software_tree(
+                &target_dir,
+                &source_cooplink,
+                &current_exe,
+                &hw_info,
+                need_gamepad_drv,
+                need_vdd_drv,
+            );
 
-            if source_cooplink.exists() {
-                let _ = fs::copy(&source_cooplink, &target_exe);
-            } else if current_exe.exists() {
-                let _ = fs::copy(&current_exe, &target_exe);
-            }
-
-            // Installation automatique des pilotes manquants (Bus Manettes & Affichage Virtuel)
-            install_missing_drivers_silently(&target_dir, need_gamepad_drv, need_vdd_drv);
+            let target_exe = effective_dir.join("cooplink.exe");
 
             if create_desktop {
                 if let Ok(user_profile) = env::var("USERPROFILE") {
@@ -908,7 +919,7 @@ impl InstallerApp {
                 let _ = setup_silent_firewall(&target_exe);
             }
 
-            let _ = register_in_windows_uninstall(&target_dir, &target_exe);
+            let _ = register_in_windows_uninstall(&effective_dir, &target_exe);
             thread::sleep(Duration::from_millis(150));
 
             complete_flag.store(true, Ordering::SeqCst);

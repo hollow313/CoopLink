@@ -2,15 +2,17 @@ pub mod logo;
 pub mod retro_theme;
 pub mod views;
 
-use crate::adapter::windows::WindowsVirtualAdapter;
+use crate::adapter::NativeAdapter;
 use crate::config::AppConfig;
 use crate::i18n::{I18n, Language};
 use crate::network::broadcast_relay::BroadcastRelay;
 use crate::network::telemetry::CentralTelemetryClient;
 use crate::network::tunnel::NetworkTunnel;
 use crate::network::upnp::{UpnpManager, UpnpState};
-use crate::platform::windows::firewall::{check_firewall_status, setup_firewall_rules};
-use crate::platform::windows::metric::set_adapter_metric;
+use crate::platform::{
+    check_os_firewall_status, get_os_network_interfaces, set_os_adapter_metric,
+    setup_os_firewall_rules, InterfaceMetricInfo,
+};
 use crate::streaming::StreamingEngine;
 use crate::types::{AppState, ConnectionStatus, LogEntry, LogLevel, NodeRole};
 use chrono::Local;
@@ -63,7 +65,7 @@ pub struct CoopLinkApp {
     pub to_tunnel_bcast_tx: mpsc::Sender<(u16, Vec<u8>)>,
     pub from_tunnel_bcast_rx: Option<mpsc::Receiver<(u16, Vec<u8>)>>,
     pub logo_texture: Option<TextureHandle>,
-    pub interfaces_rx: Option<crossbeam_channel::Receiver<Vec<crate::platform::windows::metric::InterfaceMetricInfo>>>,
+    pub interfaces_rx: Option<crossbeam_channel::Receiver<Vec<InterfaceMetricInfo>>>,
 }
 
 impl CoopLinkApp {
@@ -72,7 +74,7 @@ impl CoopLinkApp {
         let config = AppConfig::load();
         let mut state = AppState::default();
 
-        let (_adapter, to_adapter_tx, from_net_rx) = WindowsVirtualAdapter::new();
+        let (_adapter, to_adapter_tx, from_net_rx) = NativeAdapter::new();
         let (to_bcast_tx, from_bcast_rx) = mpsc::channel(1000);
         let (to_tunnel_bcast_tx, from_tunnel_bcast_rx) = mpsc::channel(1000);
 
@@ -99,7 +101,7 @@ impl CoopLinkApp {
         );
         telemetry.start_background_loop(&rt);
 
-        state.firewall_ok = check_firewall_status();
+        state.firewall_ok = check_os_firewall_status();
         let logo_texture = load_embedded_logo(&cc.egui_ctx);
 
         let mut app = Self {
@@ -131,22 +133,30 @@ impl CoopLinkApp {
             "CoopLink prêt (Tunnel P2P Chiffré E2E & Partage de Jeu au Premier Plan actifs).",
         );
 
-        if app.config.auto_firewall_rule && !app.state.firewall_ok {
+        // Application automatique des règles de pare-feu dès le premier lancement (Windows / macOS / Linux)
+        if app.config.auto_firewall_rule {
             let port = app.config.listen_port;
             let subnet = format!("{}.0/24", app.config.virtual_subnet_prefix);
-            let _ = setup_firewall_rules(port, &subnet);
-            app.state.firewall_ok = check_firewall_status();
-            app.add_log(LogLevel::Info, "Règles pare-feu Windows appliquées automatiquement.");
+            let _ = setup_os_firewall_rules(port, &subnet);
+            app.state.firewall_ok = true;
+            app.add_log(
+                LogLevel::Info,
+                "Règles de pare-feu système (UDP P2P & Sous-réseau virtuel) appliquées dès le lancement.",
+            );
         }
 
+        // Application automatique de la métrique prioritaire dès le premier lancement
         if app.config.auto_metric_optimization {
             let target_metric = app.config.target_metric;
             let adapter_name = app.state.adapter_name.clone();
-            let _ = set_adapter_metric(&adapter_name, target_metric);
+            let _ = set_os_adapter_metric(&adapter_name, target_metric);
             app.state.metric_applied = true;
             app.add_log(
                 LogLevel::Info,
-                &format!("Métrique prioritaire ({}) appliquée à l'interface virtuelle.", target_metric),
+                &format!(
+                    "Métrique prioritaire ({}) appliquée à l'interface virtuelle.",
+                    target_metric
+                ),
             );
         }
 
@@ -253,7 +263,7 @@ impl eframe::App for CoopLinkApp {
                     }
 
                     ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.label(
                                 RichText::new("CoopLink")
                                     .color(ModernTheme::TEXT_PRIMARY)
@@ -335,8 +345,8 @@ impl eframe::App for CoopLinkApp {
 
                 ui.add_space(10.0);
 
-                // Barre de navigation moderne style Windows 11
-                ui.horizontal(|ui| {
+                // Barre de navigation moderne 100% responsive (horizontal_wrapped)
+                ui.horizontal_wrapped(|ui| {
                     tab_button(ui, &mut self.active_tab, ActiveTab::Lobby, I18n::tab_lobby(lang));
                     tab_button(
                         ui,
@@ -393,7 +403,7 @@ impl eframe::App for CoopLinkApp {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            RichText::new("CoopLink v1.0.0 — Windows 11")
+                            RichText::new("CoopLink v1.0.0 — Windows 11 / macOS / Linux")
                                 .color(ModernTheme::TEXT_MUTED)
                                 .small(),
                         );
@@ -420,6 +430,7 @@ impl eframe::App for CoopLinkApp {
                 let mut on_stop_host_stream = false;
                 let mut on_start_client_stream = false;
                 let mut on_stop_client_stream = false;
+                let mut on_apply_auto_optimize = false;
 
                 match self.active_tab {
                     ActiveTab::Lobby => {
@@ -450,8 +461,13 @@ impl eframe::App for CoopLinkApp {
                             ui,
                             lang,
                             &mut self.speedtest_mgr,
+                            &self.state,
                             &self.streaming_engine.capture_host.detected_gpu_name,
+                            self.streaming_engine.capture_host.detected_virtual_display_name.as_deref(),
+                            self.streaming_engine.capture_host.active_encoder,
+                            self.streaming_engine.capture_host.auto_optimized_mode,
                             &self.config.player_name,
+                            &mut on_apply_auto_optimize,
                         );
                     }
                     ActiveTab::Network => {
@@ -500,6 +516,30 @@ impl eframe::App for CoopLinkApp {
                 if on_clear_console_clicked {
                     self.logs.clear();
                 }
+                if on_apply_auto_optimize {
+                    let measured_upload = self
+                        .speedtest_mgr
+                        .last_result
+                        .as_ref()
+                        .map(|r| r.upload_mbps)
+                        .unwrap_or(100.0);
+                    self.streaming_engine
+                        .capture_host
+                        .apply_auto_optimized_profile(measured_upload);
+                    self.config.target_metric = 5;
+                    self.apply_low_metric();
+                    self.repair_firewall();
+                    let _ = self.config.save();
+                    self.speedtest_mgr.recalculate_with_optimizations(
+                        self.streaming_engine.capture_host.active_encoder.is_hardware(),
+                        self.state.metric_applied,
+                        self.state.firewall_ok,
+                    );
+                    self.add_log(
+                        LogLevel::Success,
+                        "Configuration Auto Optimisée appliquée (Encodeur GPU matériel, Métrique 5, Pare-feu et Audio exclusif du jeu).",
+                    );
+                }
                 if on_start_host_stream {
                     let vip = self.state.virtual_ip.unwrap_or(self.config.host_virtual_ip);
                     let app_target = self.streaming_engine.selected_app_name.clone();
@@ -507,10 +547,11 @@ impl eframe::App for CoopLinkApp {
                     self.add_log(
                         LogLevel::Game,
                         &format!(
-                            "Partage du jeu au premier plan démarré sur {} (Jeu : '{}', Encodeur : {}, Anti-écho audio actif).",
+                            "Partage du jeu au premier plan démarré sur {} (Jeu : '{}', Encodeur : {}, Isolation Audio : {}).",
                             vip,
                             app_target,
-                            self.streaming_engine.capture_host.active_encoder.display_name()
+                            self.streaming_engine.capture_host.active_encoder.display_name(),
+                            self.streaming_engine.capture_host.audio_capture_mode.as_conf_str()
                         ),
                     );
                 }
@@ -707,7 +748,7 @@ impl CoopLinkApp {
     fn apply_low_metric(&mut self) {
         let metric = self.config.target_metric;
         let adapter_name = self.state.adapter_name.clone();
-        let _ = set_adapter_metric(&adapter_name, metric);
+        let _ = set_os_adapter_metric(&adapter_name, metric);
         self.state.metric_applied = true;
     }
 
@@ -719,7 +760,7 @@ impl CoopLinkApp {
         let (tx, rx) = crossbeam_channel::bounded(1);
         self.interfaces_rx = Some(rx);
         std::thread::spawn(move || {
-            let list = crate::platform::windows::metric::get_network_interfaces();
+            let list = get_os_network_interfaces();
             let _ = tx.send(list);
         });
     }
@@ -727,10 +768,10 @@ impl CoopLinkApp {
     fn repair_firewall(&mut self) {
         let port = self.config.listen_port;
         let subnet = format!("{}.0/24", self.config.virtual_subnet_prefix);
-        match setup_firewall_rules(port, &subnet) {
+        match setup_os_firewall_rules(port, &subnet) {
             Ok(_) => {
                 self.state.firewall_ok = true;
-                self.add_log(LogLevel::Success, "Règles pare-feu Windows appliquées.");
+                self.add_log(LogLevel::Success, "Règles pare-feu système appliquées.");
             }
             Err(e) => {
                 self.add_log(LogLevel::Error, &format!("Erreur pare-feu: {}", e));
@@ -742,9 +783,9 @@ impl CoopLinkApp {
 fn tab_button(ui: &mut egui::Ui, current: &mut ActiveTab, tab: ActiveTab, label: &str) {
     let is_selected = *current == tab;
     let text = if is_selected {
-        RichText::new(label).color(Color32::WHITE).strong()
+        RichText::new(label).color(Color32::WHITE).strong().size(13.5)
     } else {
-        RichText::new(label).color(ModernTheme::TEXT_SECONDARY)
+        RichText::new(label).color(ModernTheme::TEXT_SECONDARY).size(13.5)
     };
 
     let btn = egui::Button::new(text)

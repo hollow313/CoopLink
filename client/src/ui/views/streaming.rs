@@ -1,5 +1,5 @@
 use crate::i18n::Language;
-use crate::streaming::capture_host::{HardwareEncoder, VirtualGamepadType};
+use crate::streaming::capture_host::{AudioCaptureMode, HardwareEncoder, VirtualGamepadType};
 use crate::streaming::stream_viewer::{StreamDisplayMode, VideoCodec};
 use crate::streaming::{CoopInputMode, StreamingEngine, StreamingRoleTab};
 use crate::types::{AppState, NodeRole};
@@ -37,8 +37,12 @@ impl StreamingView {
                     .inner_margin(18.0)
                     .stroke(Stroke::new(1.0_f32, ModernTheme::BORDER_SUBTLE))
                     .show(ui, |ui| {
+                        let avail_w = ui.available_width();
+                        let text_max_w = (avail_w - 170.0).max(220.0);
+
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
+                                ui.set_max_width(text_max_w);
                                 ui.label(
                                     RichText::new(match lang {
                                         Language::Fr => "Jouez ensemble sur le même jeu, à distance",
@@ -53,11 +57,11 @@ impl StreamingView {
                                 );
                                 ui.label(
                                     RichText::new(match lang {
-                                        Language::Fr => "Seul le jeu ouvert au premier plan est diffusé (CoopLink reste en arrière-plan). L'anti-écho audio filtre automatiquement vos logiciels de discussion vocale.",
-                                        Language::En => "Only the foreground game is streamed (CoopLink stays in the background). Built-in audio anti-echo automatically filters out voice chat apps.",
-                                        Language::Es => "Solo se transmite el juego en primer plano (CoopLink queda en segundo plano). El filtro anti-eco excluye automáticamente el chat de voz.",
-                                        Language::De => "Nur das Spiel im Vordergrund wird übertragen. Der integrierte Audio-Echo-Schutz filtert Sprachchats automatisch heraus.",
-                                        Language::Pt => "Apenas o jogo em primeiro plano é transmitido. O filtro anti-eco exclui automaticamente o chat de voz.",
+                                        Language::Fr => "Seul le jeu ouvert au premier plan est diffusé (CoopLink reste en arrière-plan). L'isolation audio par processus ne capture que le son du jeu sans écho Discord.",
+                                        Language::En => "Only the foreground game is streamed (CoopLink stays in the background). Per-process audio isolation captures only the game's sound with zero Discord echo.",
+                                        Language::Es => "Solo se transmite el juego en primer plano. El aislamiento de audio por proceso captura únicamente el sonido del juego sin eco.",
+                                        Language::De => "Nur das Spiel im Vordergrund wird übertragen. Die Prozess-Audioisolierung überträgt nur den Spielton ohne Sprach-Echo.",
+                                        Language::Pt => "Apenas o jogo em primeiro plano é transmitido. O isolamento de áudio captura apenas o som do jogo sem eco.",
                                     })
                                     .color(ModernTheme::TEXT_SECONDARY)
                                     .size(13.5),
@@ -108,7 +112,7 @@ impl StreamingView {
                                 RichText::new(host_btn_text)
                                     .color(if is_host_tab { Color32::WHITE } else { ModernTheme::TEXT_PRIMARY })
                                     .strong()
-                                    .size(14.0),
+                                    .size(13.5),
                             )
                             .fill(if is_host_tab { ModernTheme::BLUE_ELECTRIC } else { ModernTheme::SUBTLE_BG })
                             .stroke(Stroke::new(
@@ -116,7 +120,7 @@ impl StreamingView {
                                 if is_host_tab { ModernTheme::BLUE_ELECTRIC } else { ModernTheme::BORDER_SUBTLE },
                             ))
                             .rounding(Rounding::same(10.0))
-                            .min_size(egui::vec2(cols[0].available_width(), 44.0));
+                            .min_size(egui::vec2(cols[0].available_width(), 42.0));
 
                             if cols[0].add(host_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                 engine.role_tab = StreamingRoleTab::HostShareMyGame;
@@ -134,7 +138,7 @@ impl StreamingView {
                                 RichText::new(guest_btn_text)
                                     .color(if is_guest_tab { Color32::WHITE } else { ModernTheme::TEXT_PRIMARY })
                                     .strong()
-                                    .size(14.0),
+                                    .size(13.5),
                             )
                             .fill(if is_guest_tab { ModernTheme::INDIGO_ACCENT } else { ModernTheme::SUBTLE_BG })
                             .stroke(Stroke::new(
@@ -142,7 +146,7 @@ impl StreamingView {
                                 if is_guest_tab { ModernTheme::INDIGO_ACCENT } else { ModernTheme::BORDER_SUBTLE },
                             ))
                             .rounding(Rounding::same(10.0))
-                            .min_size(egui::vec2(cols[1].available_width(), 44.0));
+                            .min_size(egui::vec2(cols[1].available_width(), 42.0));
 
                             if cols[1].add(guest_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                 engine.role_tab = StreamingRoleTab::GuestJoinFriendGame;
@@ -186,7 +190,7 @@ impl StreamingView {
         on_stop_host_stream: &mut bool,
     ) {
         // =========================================================================
-        // ÉTAPE 1 : SÉLECTION DU JEU AU PREMIER PLAN UNIQUEMENT
+        // ÉTAPE 1 : SÉLECTION DU JEU AU PREMIER PLAN & ISOLATION DU SON DU JEU
         // =========================================================================
         egui::Frame::none()
             .fill(ModernTheme::CARD_BG)
@@ -194,15 +198,15 @@ impl StreamingView {
             .inner_margin(18.0)
             .stroke(Stroke::new(1.0_f32, ModernTheme::BORDER_SUBTLE))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ModernTheme::draw_dot(ui, ModernTheme::BLUE_ELECTRIC, 5.0);
                     ui.label(
                         RichText::new(match lang {
-                            Language::Fr => "Étape 1 — Sélectionnez le jeu à partager (Premier plan uniquement)",
-                            Language::En => "Step 1 — Select the game to share (Foreground game only)",
-                            Language::Es => "Paso 1 — Selecciona el juego a compartir (Solo primer plano)",
-                            Language::De => "Schritt 1 — Spiel zum Teilen auswählen (Nur Vordergrund-Spiel)",
-                            Language::Pt => "Passo 1 — Selecione o jogo a partilhar (Apenas primeiro plano)",
+                            Language::Fr => "Étape 1 — Sélectionnez le jeu à partager & l'isolation du son",
+                            Language::En => "Step 1 — Select the game to share & audio isolation",
+                            Language::Es => "Paso 1 — Selecciona el juego a compartir y el audio",
+                            Language::De => "Schritt 1 — Spiel & Audio-Isolierung auswählen",
+                            Language::Pt => "Passo 1 — Selecione o jogo e o isolamento de som",
                         })
                         .color(ModernTheme::BLUE_ELECTRIC)
                         .strong()
@@ -224,7 +228,7 @@ impl StreamingView {
 
                 ui.add_space(10.0);
 
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(
                         RichText::new(match lang {
                             Language::Fr => "Jeu cible :",
@@ -238,7 +242,7 @@ impl StreamingView {
 
                     egui::ComboBox::from_id_salt("host_game_selector")
                         .selected_text(RichText::new(&engine.selected_app_name).strong().color(ModernTheme::BLUE_ELECTRIC))
-                        .width(340.0)
+                        .width(320.0)
                         .show_ui(ui, |ui| {
                             let windows = engine.detected_windows.clone();
                             for w in windows {
@@ -288,7 +292,7 @@ impl StreamingView {
                         .inner_margin(10.0)
                         .stroke(Stroke::new(1.0_f32, ModernTheme::BORDER_SUBTLE))
                         .show(ui, |ui| {
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 ModernTheme::draw_dot(ui, ModernTheme::GREEN_VIVID, 4.0);
                                 ui.label(
                                     RichText::new(format!("Jeu sélectionné : {}", engine.custom_exe_path))
@@ -313,20 +317,111 @@ impl StreamingView {
                 }
 
                 ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    ui.checkbox(
-                        &mut engine.capture_host.anti_audio_echo_enabled,
-                        RichText::new(match lang {
-                            Language::Fr => "Anti-Écho Audio Intelligent (Capture uniquement le son du jeu, exclut Discord / Micro)",
-                            Language::En => "Smart Audio Anti-Echo (Captures only game audio, excludes Discord / Voice Chat)",
-                            Language::Es => "Anti-Eco de Audio Inteligente (Solo captura el audio del juego, excluye Discord)",
-                            Language::De => "Intelligenter Audio-Echo-Schutz (Nur Spielton, schließt Discord/Sprachchat aus)",
-                            Language::Pt => "Anti-Eco de Áudio Inteligente (Captura apenas o som do jogo, exclui Discord)",
-                        })
-                        .color(ModernTheme::TEXT_PRIMARY)
-                        .strong(),
-                    );
-                });
+
+                // Sélecteur direct de la source audio du jeu (Zéro écho)
+                egui::Frame::none()
+                    .fill(ModernTheme::SUBTLE_BG)
+                    .rounding(Rounding::same(8.0))
+                    .inner_margin(12.0)
+                    .stroke(Stroke::new(1.0_f32, ModernTheme::BORDER_SUBTLE))
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ModernTheme::draw_dot(ui, ModernTheme::GREEN_VIVID, 4.0);
+                            ui.label(
+                                RichText::new(match lang {
+                                    Language::Fr => "Source Audio transmise à vos amis :",
+                                    Language::En => "Audio Source streamed to your friends:",
+                                    Language::Es => "Fuente de audio transmitida:",
+                                    Language::De => "Übertragene Audioquelle:",
+                                    Language::Pt => "Fonte de áudio transmitida:",
+                                })
+                                .color(ModernTheme::TEXT_PRIMARY)
+                                .strong(),
+                            );
+
+                            let is_excl = engine.capture_host.audio_capture_mode == AudioCaptureMode::ExclusiveGameProcessOnly;
+                            if ui
+                                .selectable_label(
+                                    is_excl,
+                                    match lang {
+                                        Language::Fr => "Son du jeu uniquement (Zéro écho Discord/Micro)",
+                                        Language::En => "Game Audio Only (Zero Discord/Mic Echo)",
+                                        _ => "Son du jeu uniquement (Zéro écho)",
+                                    },
+                                )
+                                .clicked()
+                            {
+                                engine.capture_host.audio_capture_mode = AudioCaptureMode::ExclusiveGameProcessOnly;
+                                engine.capture_host.anti_audio_echo_enabled = true;
+                            }
+
+                            let is_filt = engine.capture_host.audio_capture_mode == AudioCaptureMode::FilteredSystemAudio;
+                            if ui
+                                .selectable_label(
+                                    is_filt,
+                                    match lang {
+                                        Language::Fr => "Audio système filtré (Anti-écho vocal)",
+                                        Language::En => "Filtered System Audio (Voice Anti-Echo)",
+                                        _ => "Audio système filtré",
+                                    },
+                                )
+                                .clicked()
+                            {
+                                engine.capture_host.audio_capture_mode = AudioCaptureMode::FilteredSystemAudio;
+                                engine.capture_host.anti_audio_echo_enabled = true;
+                            }
+
+                            let is_dev = engine.capture_host.audio_capture_mode == AudioCaptureMode::SpecificAudioDevice;
+                            if ui
+                                .selectable_label(
+                                    is_dev,
+                                    match lang {
+                                        Language::Fr => "Choisir un périphérique audio",
+                                        Language::En => "Select Specific Audio Device",
+                                        _ => "Périphérique spécifique",
+                                    },
+                                )
+                                .clicked()
+                            {
+                                engine.capture_host.audio_capture_mode = AudioCaptureMode::SpecificAudioDevice;
+                            }
+
+                            let is_mute = engine.capture_host.audio_capture_mode == AudioCaptureMode::Muted;
+                            if ui
+                                .selectable_label(
+                                    is_mute,
+                                    match lang {
+                                        Language::Fr => "Muet (Sans son)",
+                                        Language::En => "Muted (No sound)",
+                                        _ => "Muet",
+                                    },
+                                )
+                                .clicked()
+                            {
+                                engine.capture_host.audio_capture_mode = AudioCaptureMode::Muted;
+                            }
+                        });
+
+                        if engine.capture_host.audio_capture_mode == AudioCaptureMode::SpecificAudioDevice {
+                            ui.add_space(6.0);
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("Périphérique audio cible :");
+                                egui::ComboBox::from_id_salt("host_audio_device_combo")
+                                    .selected_text(&engine.capture_host.selected_audio_device)
+                                    .width(320.0)
+                                    .show_ui(ui, |ui| {
+                                        let devs = engine.capture_host.available_audio_devices.clone();
+                                        for d in devs {
+                                            ui.selectable_value(
+                                                &mut engine.capture_host.selected_audio_device,
+                                                d.clone(),
+                                                d,
+                                            );
+                                        }
+                                    });
+                            });
+                        }
+                    });
             });
 
         ui.add_space(14.0);
@@ -340,7 +435,7 @@ impl StreamingView {
             .inner_margin(18.0)
             .stroke(Stroke::new(1.0_f32, ModernTheme::BORDER_SUBTLE))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ModernTheme::draw_dot(ui, ModernTheme::GREEN_VIVID, 5.0);
                     ui.label(
                         RichText::new(match lang {
@@ -437,7 +532,7 @@ impl StreamingView {
         ui.add_space(14.0);
 
         // =========================================================================
-        // ÉTAPE 3 : DÉMARRER LE PARTAGE & VOIR LES JOUEURS BRANCHÉS
+        // ÉTAPE 3 : DÉMARRER LE PARTAGE & VOIR LES JOUEURS BRANCHÉS (100% RESPONSIVE)
         // =========================================================================
         egui::Frame::none()
             .fill(ModernTheme::CARD_BG)
@@ -445,9 +540,14 @@ impl StreamingView {
             .inner_margin(18.0)
             .stroke(Stroke::new(1.5_f32, ModernTheme::BLUE_ELECTRIC))
             .show(ui, |ui| {
+                let avail_w = ui.available_width();
+                let btn_w = 245.0;
+                let text_max_w = (avail_w - btn_w - 20.0).max(200.0);
+
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
+                        ui.set_max_width(text_max_w);
+                        ui.horizontal_wrapped(|ui| {
                             ModernTheme::draw_dot(ui, ModernTheme::BLUE_ELECTRIC, 5.0);
                             ui.label(
                                 RichText::new(match lang {
@@ -464,11 +564,13 @@ impl StreamingView {
                         });
                         ui.label(
                             RichText::new(format!(
-                                "Jeu : {}  |  GPU : {}",
-                                engine.selected_app_name, engine.capture_host.detected_gpu_name
+                                "Jeu : {}  |  Encodeur : {} ({})",
+                                engine.selected_app_name,
+                                engine.capture_host.active_encoder.short_badge(),
+                                engine.capture_host.detected_gpu_name
                             ))
                             .color(ModernTheme::TEXT_SECONDARY)
-                            .size(13.0),
+                            .size(12.5),
                         );
                     });
 
@@ -484,11 +586,11 @@ impl StreamingView {
                                 })
                                 .color(Color32::WHITE)
                                 .strong()
-                                .size(15.0),
+                                .size(14.5),
                             )
                             .fill(ModernTheme::GREEN_VIVID)
                             .rounding(Rounding::same(10.0))
-                            .min_size(egui::vec2(240.0, 44.0));
+                            .min_size(egui::vec2(230.0, 42.0));
 
                             if ui.add(start_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                 *on_start_host_stream = true;
@@ -504,11 +606,11 @@ impl StreamingView {
                                 })
                                 .color(Color32::WHITE)
                                 .strong()
-                                .size(15.0),
+                                .size(14.5),
                             )
                             .fill(ModernTheme::RED_ERROR)
                             .rounding(Rounding::same(10.0))
-                            .min_size(egui::vec2(200.0, 44.0));
+                            .min_size(egui::vec2(200.0, 42.0));
 
                             if ui.add(stop_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                 *on_stop_host_stream = true;
@@ -574,11 +676,12 @@ impl StreamingView {
                             .inner_margin(10.0)
                             .stroke(Stroke::new(1.0_f32, border_col))
                             .show(&mut cols[(slot_num - 1) as usize], |ui| {
-                                ui.horizontal(|ui| {
+                                ui.set_min_width(ui.available_width());
+                                ui.horizontal_wrapped(|ui| {
                                     ModernTheme::draw_dot(ui, border_col, 4.0);
-                                    ui.label(RichText::new(title).color(ModernTheme::TEXT_PRIMARY).strong().size(12.5));
+                                    ui.label(RichText::new(title).color(ModernTheme::TEXT_PRIMARY).strong().size(12.0));
                                 });
-                                ui.label(RichText::new(desc).color(ModernTheme::TEXT_SECONDARY).size(12.0));
+                                ui.label(RichText::new(desc).color(ModernTheme::TEXT_SECONDARY).size(11.5));
                             });
                     }
                 });
@@ -587,33 +690,56 @@ impl StreamingView {
 
                 ui.collapsing(
                     RichText::new(match lang {
-                        Language::Fr => "Paramètres vidéo & manettes avancés (Optionnel)",
-                        Language::En => "Advanced video & controller settings (Optional)",
-                        Language::Es => "Ajustes avanzados de vídeo y mandos (Opcional)",
-                        Language::De => "Erweiterte Video- & Controller-Einstellungen (Optional)",
-                        Language::Pt => "Definições avançadas de vídeo e comando (Opcional)",
+                        Language::Fr => "Paramètres vidéo, audio & manettes avancés (Configuration Auto / Optimisée)",
+                        Language::En => "Advanced video, audio & controller settings (Auto / Optimized Config)",
+                        Language::Es => "Ajustes avanzados de vídeo, audio y mandos (Configuración Auto / Optimizada)",
+                        Language::De => "Erweiterte Video-, Audio- & Controller-Einstellungen (Auto-Optimiert)",
+                        Language::Pt => "Definições avançadas de vídeo, áudio e comando (Configuração Auto)",
                     })
-                    .color(ModernTheme::TEXT_SECONDARY)
+                    .color(ModernTheme::BLUE_ELECTRIC)
+                    .strong()
                     .size(13.0),
                     |ui| {
                         ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            ui.label("Qualité vidéo :");
-                            let is_1080 = engine.capture_host.target_height == 1080 && engine.capture_host.target_fps == 60;
+
+                        // Ligne 1 : Profil Auto / Qualité Vidéo (Responsive avec horizontal_wrapped)
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("Profil & Qualité vidéo :").strong());
+                            if ui
+                                .selectable_label(
+                                    engine.capture_host.auto_optimized_mode,
+                                    "Auto / Optimisé (Adaptatif)",
+                                )
+                                .clicked()
+                            {
+                                engine.capture_host.apply_auto_optimized_profile(100.0);
+                            }
+
+                            let is_1080 = !engine.capture_host.auto_optimized_mode
+                                && engine.capture_host.target_height == 1080
+                                && engine.capture_host.target_fps == 60;
                             if ui.selectable_label(is_1080, "1080p @ 60 FPS (Recommandé)").clicked() {
+                                engine.capture_host.auto_optimized_mode = false;
                                 engine.capture_host.target_width = 1920;
                                 engine.capture_host.target_height = 1080;
                                 engine.capture_host.target_fps = 60;
                             }
-                            let is_1440 = engine.capture_host.target_height == 1440 && engine.capture_host.target_fps == 120;
+                            let is_1440 = !engine.capture_host.auto_optimized_mode
+                                && engine.capture_host.target_height == 1440
+                                && engine.capture_host.target_fps == 120;
                             if ui.selectable_label(is_1440, "1440p @ 120 FPS (Ultra Fluide)").clicked() {
+                                engine.capture_host.auto_optimized_mode = false;
                                 engine.capture_host.target_width = 2560;
                                 engine.capture_host.target_height = 1440;
                                 engine.capture_host.target_fps = 120;
                             }
+                        });
 
-                            ui.add_space(16.0);
-                            ui.label("Encodeur GPU :");
+                        ui.add_space(6.0);
+
+                        // Ligne 2 : Encodeur GPU Matériel (Responsive avec horizontal_wrapped)
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("Encodeur GPU Matériel :").strong());
                             for enc in [
                                 HardwareEncoder::Nvenc,
                                 HardwareEncoder::Amf,
@@ -629,8 +755,30 @@ impl StreamingView {
                             }
                         });
 
-                        ui.horizontal(|ui| {
-                            ui.label("Type de manette virtuelle :");
+                        ui.add_space(6.0);
+
+                        // Ligne 3 : Options Audio Avancées (Isolation stricte du jeu + Volume + Anti-Écho)
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("Volume du son du jeu transmis :").strong());
+                            ui.add(
+                                egui::Slider::new(&mut engine.capture_host.stream_audio_volume, 0..=100)
+                                    .suffix("%"),
+                            );
+                            ui.checkbox(
+                                &mut engine.capture_host.exclude_voice_chat_apps,
+                                "Exclure Discord, TeamSpeak & Micro",
+                            );
+                            ui.checkbox(
+                                &mut engine.capture_host.acoustic_echo_cancellation,
+                                "Suppression d'écho acoustique (AEC)",
+                            );
+                        });
+
+                        ui.add_space(6.0);
+
+                        // Ligne 4 : Type de manette virtuelle (Responsive avec horizontal_wrapped)
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("Type de manette virtuelle :").strong());
                             if ui
                                 .selectable_label(
                                     engine.capture_host.default_gamepad_type == VirtualGamepadType::Xbox360,
@@ -672,7 +820,7 @@ impl StreamingView {
             .inner_margin(18.0)
             .stroke(Stroke::new(1.0_f32, ModernTheme::BORDER_SUBTLE))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ModernTheme::draw_dot(ui, ModernTheme::INDIGO_ACCENT, 5.0);
                     ui.label(
                         RichText::new(match lang {
@@ -777,9 +925,13 @@ impl StreamingView {
             .inner_margin(18.0)
             .stroke(Stroke::new(1.5_f32, ModernTheme::INDIGO_ACCENT))
             .show(ui, |ui| {
+                let avail_w = ui.available_width();
+                let text_max_w = (avail_w - 250.0).max(200.0);
+
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
+                        ui.set_max_width(text_max_w);
+                        ui.horizontal_wrapped(|ui| {
                             ModernTheme::draw_dot(ui, ModernTheme::INDIGO_ACCENT, 5.0);
                             ui.label(
                                 RichText::new(match lang {
@@ -834,11 +986,11 @@ impl StreamingView {
                                 })
                                 .color(Color32::WHITE)
                                 .strong()
-                                .size(15.0),
+                                .size(14.5),
                             )
                             .fill(ModernTheme::INDIGO_ACCENT)
                             .rounding(Rounding::same(10.0))
-                            .min_size(egui::vec2(240.0, 44.0));
+                            .min_size(egui::vec2(230.0, 42.0));
 
                             if ui.add(join_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                 *on_start_client_stream = true;
@@ -854,11 +1006,11 @@ impl StreamingView {
                                 })
                                 .color(Color32::WHITE)
                                 .strong()
-                                .size(15.0),
+                                .size(14.5),
                             )
                             .fill(ModernTheme::RED_ERROR)
                             .rounding(Rounding::same(10.0))
-                            .min_size(egui::vec2(210.0, 44.0));
+                            .min_size(egui::vec2(205.0, 42.0));
 
                             if ui.add(leave_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                 *on_stop_client_stream = true;
@@ -868,8 +1020,8 @@ impl StreamingView {
                 });
 
                 ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    ui.label("Affichage :");
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Affichage :").strong());
                     if ui
                         .selectable_label(
                             engine.stream_viewer.display_mode == StreamDisplayMode::BorderlessFullscreen,
@@ -889,8 +1041,8 @@ impl StreamingView {
                         engine.stream_viewer.display_mode = StreamDisplayMode::EmbeddedWindowed;
                     }
 
-                    ui.add_space(16.0);
-                    ui.label("Décodage matériel :");
+                    ui.add_space(12.0);
+                    ui.label(RichText::new("Décodage matériel :").strong());
                     for codec in [VideoCodec::Hevc, VideoCodec::Av1, VideoCodec::H264] {
                         if ui
                             .selectable_label(engine.stream_viewer.preferred_codec == codec, codec.label())

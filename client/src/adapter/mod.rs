@@ -19,15 +19,12 @@ pub trait VirtualAdapter: Send + Sync {
     fn shutdown(&mut self) -> Result<()>;
 }
 
-#[cfg(target_os = "windows")]
 pub mod windows;
-
-#[cfg(target_os = "linux")]
 pub mod linux;
-
-#[cfg(target_os = "macos")]
 pub mod macos;
 
+#[cfg(target_os = "windows")]
+pub use windows::WindowsVirtualAdapter as NativeAdapter;
 
 #[cfg(target_os = "linux")]
 pub use linux::LinuxVirtualAdapter as NativeAdapter;

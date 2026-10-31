@@ -1,6 +1,6 @@
 use crate::config::AppConfig;
 use crate::i18n::Language;
-use crate::platform::windows::process::set_windows_autostart;
+use crate::platform::set_os_autostart;
 use crate::ui::retro_theme::ModernTheme;
 use egui::{Color32, CursorIcon, RichText, Rounding, Stroke, Ui};
 
@@ -138,7 +138,7 @@ impl SettingsView {
                             )
                             .changed()
                         {
-                            set_windows_autostart(config.start_with_windows);
+                            set_os_autostart(config.start_with_windows);
                             let _ = config.save();
                         }
 
@@ -220,7 +220,7 @@ impl SettingsView {
                             .rounding(Rounding::same(8.0));
 
                             if ui.add(save_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                                set_windows_autostart(config.start_with_windows);
+                                set_os_autostart(config.start_with_windows);
                                 let _ = config.save();
                                 *saved_notice = true;
                             }

@@ -90,8 +90,8 @@ impl ModernTheme {
 
         style.visuals = visuals;
         style.interaction.selectable_labels = false;
-        style.spacing.item_spacing = egui::vec2(10.0, 10.0);
-        style.spacing.button_padding = egui::vec2(16.0, 9.0);
+        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        style.spacing.button_padding = egui::vec2(11.0, 7.5);
 
         ctx.set_style(style);
     }
