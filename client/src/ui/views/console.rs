@@ -1,6 +1,6 @@
 use crate::types::{LogEntry, LogLevel};
-use crate::ui::retro_theme::RetroTheme;
-use egui::{Color32, RichText, ScrollArea, Ui};
+use crate::ui::retro_theme::ModernTheme;
+use egui::{RichText, Rounding, ScrollArea, Stroke, Ui};
 
 pub struct ConsoleView;
 
@@ -8,21 +8,21 @@ impl ConsoleView {
     pub fn render(ui: &mut Ui, logs: &[LogEntry], on_clear_clicked: &mut bool) {
         ui.vertical(|ui| {
             egui::Frame::none()
-                .fill(RetroTheme::BG_DARK)
-                .stroke(egui::Stroke::new(1.0_f32, RetroTheme::GREEN_VIVID))
-                .inner_margin(12.0)
-                .rounding(7.0)
+                .fill(ModernTheme::CARD_BG)
+                .stroke(Stroke::new(1.0_f32, ModernTheme::BORDER_SUBTLE))
+                .inner_margin(16.0)
+                .rounding(Rounding::same(10.0))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.heading(
-                            RichText::new("📟 TERMINAL SYSTÈME & ÉVÉNEMENTS RÉSEAU")
-                                .color(RetroTheme::GREEN_VIVID)
-                                .monospace()
-                                .strong(),
+                        ui.label(
+                            RichText::new("Journal d'activité réseau & streaming")
+                                .color(ModernTheme::BLUE_ELECTRIC)
+                                .strong()
+                                .size(16.0),
                         );
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("🗑 Effacer").clicked() {
+                            if ui.button("Effacer l'historique").clicked() {
                                 *on_clear_clicked = true;
                             }
                         });
@@ -33,39 +33,40 @@ impl ConsoleView {
                     ui.add_space(6.0);
 
                     ScrollArea::vertical()
-                        .max_height(350.0)
+                        .max_height(370.0)
                         .auto_shrink([false, false])
                         .stick_to_bottom(true)
                         .show(ui, |ui| {
                             if logs.is_empty() {
                                 ui.label(
-                                    RichText::new("[SYSTEM] Prêt. En attente d'événements réseau...")
-                                        .color(RetroTheme::TEXT_MUTED)
-                                        .monospace(),
+                                    RichText::new("Aucun événement enregistré pour le moment.")
+                                        .color(ModernTheme::TEXT_MUTED),
                                 );
                             }
 
                             for entry in logs {
                                 ui.horizontal(|ui| {
-                                    // Timestamp
                                     ui.label(
-                                        RichText::new(format!("[{}]", entry.timestamp))
-                                            .color(RetroTheme::TEXT_MUTED)
-                                            .monospace(),
+                                        RichText::new(&entry.timestamp)
+                                            .color(ModernTheme::TEXT_MUTED)
+                                            .small(),
                                     );
 
-                                    // Badge & Message
                                     let (tag, color) = match entry.level {
-                                        LogLevel::Info => ("[INFO]", RetroTheme::NEON_CYAN),
-                                        LogLevel::Warning => ("[WARN]", RetroTheme::RETRO_AMBER),
-                                        LogLevel::Error => ("[FAIL]", RetroTheme::RETRO_RED),
-                                        LogLevel::Success => ("[OK]", RetroTheme::NEON_GREEN),
-                                        LogLevel::Game => ("[GAME]", RetroTheme::NEON_MAGENTA),
+                                        LogLevel::Info => ("Info", ModernTheme::BLUE_ELECTRIC),
+                                        LogLevel::Warning => ("Alerte", ModernTheme::ORANGE_CORAL),
+                                        LogLevel::Error => ("Erreur", ModernTheme::RED_ERROR),
+                                        LogLevel::Success => ("Succès", ModernTheme::GREEN_VIVID),
+                                        LogLevel::Game => ("Session", ModernTheme::INDIGO_ACCENT),
                                     };
 
-                                    ui.label(RichText::new(tag).color(color).monospace().strong());
-                                    ui.label(RichText::new(&entry.message).color(Color32::WHITE).monospace());
+                                    ui.label(RichText::new(tag).color(color).strong().small());
+                                    ui.label(
+                                        RichText::new(&entry.message)
+                                            .color(ModernTheme::TEXT_PRIMARY),
+                                    );
                                 });
+                                ui.add_space(2.0);
                             }
                         });
                 });

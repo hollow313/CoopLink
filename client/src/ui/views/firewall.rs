@@ -1,7 +1,7 @@
 use crate::config::AppConfig;
 use crate::types::AppState;
-use crate::ui::retro_theme::RetroTheme;
-use egui::{Color32, RichText, Ui};
+use crate::ui::retro_theme::ModernTheme;
+use egui::{Color32, RichText, Rounding, Stroke, Ui};
 
 pub struct FirewallView;
 
@@ -12,125 +12,115 @@ impl FirewallView {
         config: &mut AppConfig,
         on_repair_firewall_clicked: &mut bool,
     ) {
-        ui.vertical(|ui| {
-            // Carte statut pare-feu
-            egui::Frame::none()
-                .fill(RetroTheme::PANEL_BG)
-                .stroke(egui::Stroke::new(1.0_f32, RetroTheme::NEON_MAGENTA))
-                .inner_margin(12.0)
-                .rounding(4.0)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.heading(
-                            RichText::new("🛡 DIAGNOSTIC & PARE-FEU WINDOWS (FIREWALL)")
-                                .color(RetroTheme::NEON_MAGENTA)
-                                .strong(),
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Frame::none()
+                    .fill(ModernTheme::CARD_BG)
+                    .stroke(Stroke::new(1.0_f32, ModernTheme::BORDER_SUBTLE))
+                    .inner_margin(16.0)
+                    .rounding(Rounding::same(10.0))
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new("Sécurité & Pare-feu Windows Defender")
+                                .color(ModernTheme::BLUE_ELECTRIC)
+                                .strong()
+                                .size(16.0),
+                        );
+                        ui.add_space(6.0);
+
+                        ui.label(
+                            RichText::new(
+                                "CoopLink configure automatiquement les règles d'autorisation dans le pare-feu Windows \
+                                 afin d'autoriser le maillage P2P (10.244.0.0/24) et le streaming Sunshine/Moonlight sans coupure.",
+                            )
+                            .color(ModernTheme::TEXT_SECONDARY),
+                        );
+
+                        ui.add_space(12.0);
+
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("État des règles :")
+                                    .color(ModernTheme::TEXT_PRIMARY)
+                                    .strong(),
+                            );
+
+                            if state.firewall_ok {
+                                ui.label(
+                                    RichText::new("✔ Configuré et opérationnel")
+                                        .color(ModernTheme::GREEN_VIVID)
+                                        .strong(),
+                                );
+                            } else {
+                                ui.label(
+                                    RichText::new("⚠ Configuration recommandée")
+                                        .color(ModernTheme::ORANGE_CORAL)
+                                        .strong(),
+                                );
+                            }
+                        });
+
+                        ui.add_space(12.0);
+
+                        ui.horizontal(|ui| {
+                            let btn = egui::Button::new(
+                                RichText::new("Appliquer / Réparer les règles pare-feu")
+                                    .color(Color32::WHITE)
+                                    .strong(),
+                            )
+                            .fill(ModernTheme::BLUE_ELECTRIC)
+                            .rounding(Rounding::same(8.0));
+
+                            if ui.add(btn).clicked() {
+                                *on_repair_firewall_clicked = true;
+                            }
+                        });
+                    });
+
+                ui.add_space(12.0);
+
+                egui::Frame::none()
+                    .fill(ModernTheme::CARD_BG)
+                    .stroke(Stroke::new(1.0_f32, ModernTheme::BORDER_SUBTLE))
+                    .inner_margin(16.0)
+                    .rounding(Rounding::same(10.0))
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new("Règles réseau enregistrées")
+                                .color(ModernTheme::TEXT_PRIMARY)
+                                .strong()
+                                .size(15.5),
+                        );
+                        ui.add_space(8.0);
+
+                        render_rule_item(
+                            ui,
+                            "CoopLink — Tunnel P2P Direct (UDP/TCP)",
+                            "Autorise les flux directs entre pairs sans passer par le serveur central.",
+                        );
+                        render_rule_item(
+                            ui,
+                            &format!("CoopLink — Sous-réseau Virtuel ({}.0/24)", config.virtual_subnet_prefix),
+                            "Autorise le trafic LAN et le flux Sunshine/Moonlight strictement sur l'interface virtuelle.",
+                        );
+                        render_rule_item(
+                            ui,
+                            "CoopLink — Découverte LAN & Périphériques ViGEmBus",
+                            "Autorise la découverte des salons locaux et l'injection basse latence des manettes.",
                         );
                     });
-                    ui.add_space(6.0);
-
-                    ui.label(
-                        RichText::new(
-                            "Le pare-feu Windows Defender bloque fréquemment les connexions entrantes des jeux vidéo \
-                             et les paquets de découverte LAN provenant de réseaux distants. CoopLink peut enregistrer \
-                             automatiquement les exceptions nécessaires pour garantir une stabilité à 100%.",
-                        )
-                        .color(RetroTheme::TEXT_MUTED),
-                    );
-
-                    ui.add_space(10.0);
-
-                    // Statut détecté
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("STATUT DES RÈGLES PARE-FEU:").color(RetroTheme::TEXT_PRIMARY).strong());
-
-                        if state.firewall_ok {
-                            ui.label(
-                                RichText::new("✔ ACTIF & SÉCURISÉ (RÈGLES DÉTECTÉES)")
-                                    .color(RetroTheme::NEON_GREEN)
-                                    .strong(),
-                            );
-                        } else {
-                            ui.label(
-                                RichText::new("⚠ NON CONFIGURÉ OU PARTIELLEMENT BLOQUÉ")
-                                    .color(RetroTheme::RETRO_AMBER)
-                                    .strong(),
-                            );
-                        }
-                    });
-
-                    ui.add_space(10.0);
-
-                    ui.horizontal(|ui| {
-                        let btn = egui::Button::new(
-                            RichText::new("🛡 APPLIQUER / RÉPARER LES RÈGLES PARE-FEU EN 1 CLIC")
-                                .color(Color32::WHITE)
-                                .strong(),
-                        )
-                        .fill(RetroTheme::NEON_MAGENTA);
-
-                        if ui.add(btn).clicked() {
-                            *on_repair_firewall_clicked = true;
-                        }
-
-                        if state.firewall_ok {
-                            ui.label(
-                                RichText::new("Toutes les règles sont opérationnelles !")
-                                    .color(RetroTheme::NEON_GREEN),
-                            );
-                        }
-                    });
-                });
-
-            ui.add_space(15.0);
-
-            // Détails des règles appliquées
-            egui::Frame::none()
-                .fill(RetroTheme::PANEL_BG)
-                .stroke(egui::Stroke::new(1.0_f32, RetroTheme::BORDER_SUBTLE))
-                .inner_margin(14.0)
-                .rounding(7.0)
-                .show(ui, |ui| {
-                    ui.heading(
-                        RichText::new("📝 DÉTAIL DES EXCEPTIONS PARE-FEU DE JEU")
-                            .color(RetroTheme::TEXT_PRIMARY)
-                            .strong(),
-                    );
-                    ui.add_space(8.0);
-
-                    render_rule_item(
-                        ui,
-                        "CoopLink - Core Virtual LAN (In & Out)",
-                        "Autorise les flux de données UDP/TCP de l'exécutable sans blocage UAC.",
-                        true,
-                    );
-                    render_rule_item(
-                        ui,
-                        &format!("CoopLink - Gaming Virtual Subnet ({}/24)", config.virtual_subnet_prefix),
-                        "Autorise tout échange direct entre les adresses IP virtuelles des joueurs connectés.",
-                        true,
-                    );
-                    render_rule_item(
-                        ui,
-                        "CoopLink - UDP Gaming Broadcast Discovery",
-                        "Autorise la réception des annonces de parties LAN hébergées (255.255.255.255).",
-                        true,
-                    );
-                });
-        });
+            });
     }
 }
 
-fn render_rule_item(ui: &mut Ui, title: &str, desc: &str, active: bool) {
+fn render_rule_item(ui: &mut Ui, title: &str, desc: &str) {
     ui.horizontal(|ui| {
-        let icon = if active {
-            RichText::new("✔").color(RetroTheme::NEON_GREEN)
-        } else {
-            RichText::new("✖").color(RetroTheme::RETRO_RED)
-        };
-        ui.label(icon);
-        ui.label(RichText::new(title).color(Color32::WHITE).strong());
+        ui.label(RichText::new("✔").color(ModernTheme::GREEN_VIVID).strong());
+        ui.vertical(|ui| {
+            ui.label(RichText::new(title).color(ModernTheme::TEXT_PRIMARY).strong());
+            ui.label(RichText::new(desc).color(ModernTheme::TEXT_SECONDARY).small());
+        });
     });
-    ui.label(RichText::new(desc).color(RetroTheme::TEXT_MUTED).small());
     ui.add_space(6.0);
 }

@@ -1,6 +1,6 @@
 use std::io::Result;
 use std::os::windows::process::CommandExt;
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output};
 
 pub const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -10,6 +10,14 @@ pub fn run_hidden(program: &str, args: &[&str]) -> Result<Output> {
     cmd.args(args);
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd.output()
+}
+
+/// Lance un processus démon en tâche de fond sans bloquer et sans fenêtre CMD
+pub fn spawn_hidden(program: &str, args: &[&str]) -> Result<Child> {
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.spawn()
 }
 
 /// Exécute une commande PowerShell sans aucune fenêtre visible

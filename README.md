@@ -1,124 +1,65 @@
-# ⚡ CoopLink — Virtual LAN Gaming Engine
+# ⚡ CoopLink — Virtual LAN P2P & Co-op Streaming Engine
 
-> **Jouez à vos jeux vidéo préférés en coopération locale (LAN), même à distance.**  
-> *Moteur 100% Rust haute performance, architecture modulaire Client & Serveur.*
-
----
-
-## 🎨 Charte Graphique & Identité Visuelle (Design 2026)
-
-CoopLink intègre une identité visuelle moderne 2026 inspirée de son logo officiel :
-- **Fonds & Contrastes** : Dark Carbon & Obsidian (`#0B0C0E`, `#111317`, `#171A21`) — zéro fond bleu criard, finition mate pure gamer.
-- **Nuances dominantes** : Cyan vibrant (`#00D2FF`), Bleu électrique (`#0057FF`), Bleu nuit profond (`#0038A8`).
-- **Nuances secondaires** : Vert vif (`#00E599`), Vert menthe (`#00BFA5`), Indigo (`#651FFF`), Orange corail (`#FF6D00`).
-- **Typographie** : Blanc pur (`#FFFFFF`), Blanc cassé (`#F0F4F8`), Gris neutre (`#95A1B2`).
+> **Jouez à vos jeux vidéo préférés en coopération locale (LAN & Remote Play Co-op), même à distance.**  
+> *Moteur 100% Rust haute performance — Architecture Peer-to-Peer directe, Streaming Basse Latence (Sunshine / Moonlight) & Partage de Manettes (ViGEmBus).*
 
 ---
 
-## 📁 Architecture du Projet
+## 🎨 Charte Graphique & Identité Visuelle (Windows 11 Fluent Light)
 
-Le projet est structuré en **Workspace Cargo** :
-```
-CoopLink/
-├── client/                     # Application Client Gaming & Mire d'installation Windows 11
-│   ├── src/                    # Code source du client (GUI moderne, Wintun, UPnP, Firewall)
-│   ├── installer/              # Script Inno Setup & code de l'assistant d'installation
-│   └── Cargo.toml
-│
-├── server/                     # Serveur centralisé de coordination, relais & Web Admin
-│   ├── src/
-│   │   ├── hub.rs              # Hub UDP 30024 : attribution des ClientIDs, STUN, relais
-│   │   ├── web.rs              # Dashboard Web d'administration en temps réel
-│   │   ├── config.rs           # Configuration et variables d'environnement
-│   │   └── main.rs
-│   ├── Dockerfile              # Container Docker multi-stage (Utilisateur non-root 568)
-│   └── Cargo.toml
-│
-├── .github/workflows/          # CI/CD GitHub Actions
-│   └── docker-build.yml        # Build & publication automatique du container Docker
-│
-├── images/                     # Logos et ressources visuelles
-├── docker-compose.yml          # Déploiement en 1 commande du serveur
-├── Cargo.toml                  # Workspace racine
-└── LICENSE.md                  # Licence Commerciale Propriétaire
-```
+CoopLink adopte un design moderne, lumineux et épuré aligné sur **Windows 11 Fluent Design** et les couleurs exactes de son logo officiel (`images/CoopLink.png`) :
+- **Surfaces & Cartes** : Blanc pur (`#FFFFFF`) et fond Mica clair (`#F4F7FB`) avec bordures subtiles (`#E2E8F0`) — aucun thème sombre "bleu nuit" ni style rétro.
+- **Accents du Logo** :
+  - Bleu électrique principal : `#0066FF`
+  - Cyan / Turquoise vibrant : `#00BCF2`
+  - Vert émeraude / Menthe réseau : `#00BA88`
+  - Violet / Indigo : `#7B3FE4`
+  - Orange corail (sphère centrale) : `#FF7A28`
+- **Installateur Windows 11 classique (`cooplink-setup.exe`)** : Assistant d'installation natif en 4 étapes (Bienvenue, Contrat de Licence, Dossier & Options système, Progression & Fin).
 
 ---
 
-## 🖥️ 1. Le Client Gaming (`client/`)
+## 🎮 Module de Streaming Co-op Basse Latence (Sunshine + Moonlight + ViGEmBus)
 
-- **Binaire autonome** : `cooplink.exe` (sans runtime externe lourd, zéro fenêtre noire CMD).
-- **Mire d'installation graphique** : `cooplink-setup.exe` (assistant Windows complet avec logo, licence, raccourcis, pare-feu automatique et désinstallation propre).
-- **Ouverture de port automatique UPnP** : aucune configuration manuelle de box internet requise pour l'hôte.
-- **Métrique basse prioritaire (valeur 5)** : garantit que Windows achemine les paquets de découverte LAN sur CoopLink avant le Wi-Fi physique ou la box.
-- **Répéteur de Broadcast Gaming** : compatible Blizzard (6112), Valve Source (27015), Unreal Engine (7777), Minecraft LAN, etc.
-- **Multi-joueurs** : supporte 2 clients ou plus connectés ensemble sur le même salon.
+CoopLink intègre directement une orchestration **Sunshine (Hôte)** et **Moonlight (Client)** sur le maillage virtuel P2P :
 
----
+### 1. Architecture Hôte (Serveur Sunshine embarqué/orchestré)
+- **Isolation Réseau Sécurisée** : L'écoute de Sunshine est liée exclusivement à l'interface virtuelle CoopLink (`bind_address = 10.244.0.1`, `upnp = disabled`), pilotée via l'API locale HTTPS/REST (`https://127.0.0.1:47990/api/`).
+- **Capture & Encodage Matériel** : Détection automatique du GPU (`NVENC`, `AMF`, `QuickSync` avec fallback logiciel) et adaptation dynamique du débit (1080p @ 60 FPS ou 1440p @ 120 FPS selon la bande passante du tunnel P2P).
+- **Partage de Manettes Multi-Joueurs (`ViGEmBus`)** :
+  - Émulation de manettes virtuelles **Xbox 360 (XInput)** ou **DualShock 4**.
+  - **Zéro conflit d'assignation** : Le **Joueur 1** est verrouillé sur l'Hôte local (Slot XInput `#0`), tandis que les amis distants sont automatiquement assignés aux **Joueur 2, Joueur 3 et Joueur 4** (Slots XInput `#1`, `#2`, `#3`).
 
-## 🐳 2. Le Serveur Centralisé & Container Docker (`server/`)
+### 2. Architecture Client (Renderer Moonlight)
+- **Décodage Matériel Obligatoire (`< 5 ms`)** : Support `HEVC (H.265)`, `AV1` et `H.264` en mode **Fenêtré intégré** ou **Plein écran sans bordure**.
+- **Capture Périphériques** : Hooking XInput / DirectInput / SDL2 à très basse latence, avec interrupteur configurable pour autoriser ou bloquer le partage Clavier/Souris.
 
-Le serveur centralise la signalisation, l'attribution des identifiants uniques (`ClientID`), la traversée de NAT (UDP hole punching) et le relais de secours.
-
-### Caractéristiques du Container :
-- **Ports Exposés** :
-  - `30024/udp` : Tunnel gaming, attribution des `ClientID`, coordination et paquets de découverte LAN.
-  - `30025/tcp` : Dashboard Web d'administration et monitoring en direct.
-- **Utilisateur de sécurité** : Exécuté sous l'UID/GID **`568:568`** (non-root sécurisé).
-- **Volume persistant à binder** : **`/data`** (stocke la configuration `server_config.json`, les données et l'historique).
-- **Build automatique GitHub Actions** : Déclenché à chaque push sur `main`, compile sur Alpine Linux et publie l'image sur GitHub Packages (`ghcr.io/hollow313/cooplink-server:latest`).
-
-### 🚀 Lancement avec Docker Compose
-
-```yaml
-services:
-  cooplink-server:
-    image: ghcr.io/hollow313/cooplink-server:latest
-    container_name: cooplink-server
-    restart: unless-stopped
-    user: "568:568"
-    ports:
-      - "30024:30024/udp"   # Coordination & tunnel UDP
-      - "30025:30025/tcp"   # Dashboard Web d'administration
-    environment:
-      - PORT_UDP=30024
-      - PORT_WEB=30025
-      - DATA_DIR=/data
-      - SERVER_NAME=CoopLink Official Master Hub
-    volumes:
-      - ./data:/data        # Dossier bindé pour la persistance
-```
-
-Pour lancer le serveur :
-```bash
-docker compose up -d
-```
-
-### 🌐 Dashboard Web d'Administration
-Ouvrez simplement votre navigateur sur `http://<IP-SERVEUR>:30025` :
-- Vue d'ensemble des **Salons Actifs** et du nombre de joueurs par salon.
-- Liste complète de **tous les Clients Connectés avec leur ClientID unique** (ex: `#1001`, `#1002`...), leur IP virtuelle, leur endpoint public et leur latence (Ping).
-- Statistiques de débit réseau (Mo relayés en direct).
-- Bouton d'expulsion de salon en 1 clic pour les administrateurs.
-- API REST intégrée : `/api/stats`, `/api/rooms`.
+### 3. Appairage Automatique « Zero-Config »
+- **Zéro code PIN à 4 chiffres à saisir** : Le canal de contrôle chiffré P2P de CoopLink échange automatiquement les certificats SSL et valide le PIN sur l'API locale de l'Hôte.
+- **Zéro copier-coller d'IP** : Le client découvre automatiquement l'IP virtuelle de l'Hôte (`10.244.0.1`) dès la connexion au salon.
 
 ---
 
-## 🔨 Compilation depuis les sources
+## 🔗 Architecture 100% Peer-to-Peer (P2P) Directe
+
+- **Aucun trafic de jeu ni flux vidéo ne transite par le serveur central** pendant vos sessions.
+- Le serveur central (`server/`) intervient **uniquement au tout début** (signalisation UDP sur le port `30024`) pour :
+  1. Créer ou référencer le salon et attribuer un `ClientID` unique.
+  2. Échanger les endpoints publics (`IP:Port`) des pairs afin d'établir le **tunnel P2P direct (UDP Hole Punching)**.
+- Le port `30025/tcp` expose le **Dashboard Web d'Administration** (supervision des salons et des `ClientID`s, utilisateur Docker non-root `568:568`, volume `/data`).
+
+---
+
+## 🔨 Compilation & Exécutables
 
 ```powershell
-# Cloner le dépôt
-git clone https://github.com/hollow313/CoopLink.git
-cd CoopLink
-
-# Compiler tout le workspace (Client + Installateur + Serveur)
-cargo build --release --workspace
-
-# Les exécutables sont générés dans target/release/ :
-# - cooplink.exe (Client Gaming)
-# - cooplink-setup.exe (Installateur Client Windows)
-# - cooplink-server.exe (Serveur autonome)
+# Compiler le Client et l'Installateur Windows 11 en mode Release
+cargo build --release --bin cooplink --bin cooplink-setup
 ```
+
+Les exécutables générés se trouvent dans `target/release/` :
+- `target/release/cooplink-setup.exe` : Assistant d'installation Windows 11
+- `target/release/cooplink.exe` : Application Client CoopLink
 
 ---
 

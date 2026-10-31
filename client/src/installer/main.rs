@@ -1,4 +1,4 @@
-// CoopLink - Graphical Setup Installer
+// CoopLink - Windows 11 Graphical Setup Installer
 // Copyright (c) 2026 Loic HUON. All Rights Reserved.
 // Proprietary Commercial Software.
 
@@ -12,15 +12,15 @@ use wizard::InstallerApp;
 
 fn main() -> eframe::Result<()> {
     let mut vp = egui::ViewportBuilder::default()
-        .with_title("Installation de CoopLink v1.0.0")
-        .with_inner_size([640.0, 480.0])
-        .with_min_inner_size([640.0, 480.0])
+        .with_title("Installation de CoopLink")
+        .with_inner_size([660.0, 490.0])
+        .with_min_inner_size([660.0, 490.0])
         .with_resizable(false)
         .with_maximize_button(false)
         .with_active(true)
         .with_decorations(true);
 
-    if let Ok(img) = image::load_from_memory(include_bytes!("../../../images/logo.jpg")) {
+    if let Ok(img) = image::load_from_memory(include_bytes!("../../../images/CoopLink.png")) {
         let rgba = img.into_rgba8();
         let (width, height) = rgba.dimensions();
         vp = vp.with_icon(egui::IconData {

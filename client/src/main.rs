@@ -8,6 +8,7 @@ mod adapter;
 mod config;
 mod network;
 mod platform;
+mod streaming;
 mod types;
 mod ui;
 
@@ -70,16 +71,16 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    // Lancement de l'interface graphique Rétro Gaming (eframe / egui)
+    // Lancement de l'interface graphique moderne Windows 11 (eframe / egui)
     let mut vp = egui::ViewportBuilder::default()
-        .with_title("CoopLink // Virtual LAN Gaming Engine")
-        .with_inner_size([980.0, 680.0])
-        .with_min_inner_size([800.0, 560.0])
+        .with_title("CoopLink")
+        .with_inner_size([1020.0, 700.0])
+        .with_min_inner_size([840.0, 580.0])
         .with_active(true)
         .with_decorations(true)
         .with_resizable(true);
 
-    if let Ok(img) = image::load_from_memory(include_bytes!("../images/logo.jpg")) {
+    if let Ok(img) = image::load_from_memory(include_bytes!("../../images/CoopLink.png")) {
         let rgba = img.into_rgba8();
         let (width, height) = rgba.dimensions();
         vp = vp.with_icon(egui::IconData {

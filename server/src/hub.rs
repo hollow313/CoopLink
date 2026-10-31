@@ -157,11 +157,8 @@ impl ServerHub {
                     }
                 }
             }
-            // TunnelData ou BroadcastGaming : Relais direct
-            0x05 | 0x06 => {
-                self.total_packets_relayed.fetch_add(1, Ordering::Relaxed);
-                self.relay_room_packet(buf, src_endpoint, socket).await;
-            }
+            // Architecture 100% P2P Direct : Le serveur ne relaie AUCUN trafic de jeu ou de streaming.
+            // Il sert uniquement au début pour créer le salon, attribuer les IDs et échanger les endpoints P2P.
             _ => {}
         }
     }
@@ -176,7 +173,7 @@ impl ServerHub {
         // Attribution de l'identifiant client unique
         let client_id = self.next_client_id.fetch_add(1, Ordering::SeqCst);
 
-        let (assigned_ip, host_name) = {
+        let (assigned_ip, host_name, room_peers) = {
             let mut rooms = self.rooms.write();
             let room = rooms.entry(room_code.clone()).or_insert_with(|| ActiveRoom {
                 room_code: room_code.clone(),
@@ -208,56 +205,48 @@ impl ServerHub {
             let host_name = room.host_name.clone();
             room.clients.push(client.clone());
             room.client_count = room.clients.len();
+            let peers_snapshot = room.clients.clone();
 
             self.clients_by_id.write().insert(client_id, client);
             self.endpoint_to_id.write().insert(src_endpoint, client_id);
 
-            (assigned_ip, host_name)
+            (assigned_ip, host_name, peers_snapshot)
         };
 
         info!(
-            "Nouveau Client #{} '{}' connecté sur le port 30024 [Salle: {}] -> IP Virtuelle: {}",
-            client_id, player_name, room_code, assigned_ip
+            "Signalisation P2P : Client #{} '{}' enregistré [Salle: {}] -> IP Virtuelle: {} (Endpoint P2P: {})",
+            client_id, player_name, room_code, assigned_ip, src_endpoint
         );
 
-        // Construction de la réponse Handshake
+        // 1. Construction de la réponse Handshake pour le client
         let resp = encode_handshake_response(true, assigned_ip, client_id, &host_name, "");
         self.total_bytes_tx.fetch_add(resp.len() as u64, Ordering::Relaxed);
         let _ = socket.send_to(&resp, src_endpoint).await;
+
+        // 2. Envoi de la liste des pairs (Endpoints directs pour UDP Hole Punching P2P) à tous les membres du salon
+        self.broadcast_peer_list_for_direct_p2p(&room_peers, socket).await;
     }
 
-    async fn relay_room_packet(
+    async fn broadcast_peer_list_for_direct_p2p(
         &self,
-        buf: &[u8],
-        src_endpoint: SocketAddr,
+        peers: &[ConnectedClient],
         socket: &Arc<UdpSocket>,
     ) {
-        let cid = match self.endpoint_to_id.read().get(&src_endpoint) {
-            Some(&id) => id,
-            None => return,
-        };
+        if let Ok(json_bytes) = serde_json::to_vec(peers) {
+            let mut pkt = Vec::with_capacity(10 + json_bytes.len());
+            pkt.extend_from_slice(PROTOCOL_MAGIC);
+            pkt.push(PROTOCOL_VERSION);
+            pkt.push(0x07); // PacketType::PeerListP2P (Coordination initiale uniquement)
+            pkt.extend_from_slice(&(json_bytes.len() as u16).to_be_bytes());
+            pkt.extend_from_slice(&json_bytes);
+            let crc = crc32fast::hash(&pkt);
+            pkt.extend_from_slice(&crc.to_be_bytes());
 
-        let room_code = match self.clients_by_id.read().get(&cid) {
-            Some(c) => c.room_code.clone(),
-            None => return,
-        };
-
-        let target_endpoints: Vec<SocketAddr> = {
-            let rooms = self.rooms.read();
-            if let Some(r) = rooms.get(&room_code) {
-                r.clients
-                    .iter()
-                    .filter(|c| c.endpoint != src_endpoint)
-                    .map(|c| c.endpoint)
-                    .collect()
-            } else {
-                Vec::new()
+            self.total_packets_relayed.fetch_add(1, Ordering::Relaxed);
+            for peer in peers {
+                self.total_bytes_tx.fetch_add(pkt.len() as u64, Ordering::Relaxed);
+                let _ = socket.send_to(&pkt, peer.endpoint).await;
             }
-        };
-
-        for target in target_endpoints {
-            self.total_bytes_tx.fetch_add(buf.len() as u64, Ordering::Relaxed);
-            let _ = socket.send_to(buf, target).await;
         }
     }
 

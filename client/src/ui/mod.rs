@@ -9,13 +9,14 @@ use crate::network::tunnel::NetworkTunnel;
 use crate::network::upnp::{UpnpManager, UpnpState};
 use crate::platform::windows::firewall::{check_firewall_status, setup_firewall_rules};
 use crate::platform::windows::metric::set_adapter_metric;
+use crate::streaming::StreamingEngine;
 use crate::types::{AppState, ConnectionStatus, LogEntry, LogLevel, NodeRole};
 use chrono::Local;
 use eframe::egui;
-use egui::{RichText, TextureHandle};
+use egui::{Color32, RichText, TextureHandle};
 use logo::load_embedded_logo;
 use parking_lot::Mutex;
-use retro_theme::RetroTheme;
+use retro_theme::ModernTheme;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -25,10 +26,12 @@ use views::firewall::FirewallView;
 use views::lobby::LobbyView;
 use views::network::NetworkView;
 use views::settings::SettingsView;
+use views::streaming::StreamingView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {
     Lobby,
+    Streaming,
     Network,
     Firewall,
     Settings,
@@ -45,6 +48,7 @@ pub struct CoopLinkApp {
     pub tunnel: Arc<NetworkTunnel>,
     pub broadcast_relay: Arc<BroadcastRelay>,
     pub upnp_mgr: Arc<Mutex<UpnpManager>>,
+    pub streaming_engine: StreamingEngine,
     pub to_adapter_tx: mpsc::Sender<Vec<u8>>,
     pub from_net_rx: Option<mpsc::Receiver<Vec<u8>>>,
     pub to_bcast_tx: mpsc::Sender<(u16, Vec<u8>)>,
@@ -57,7 +61,7 @@ pub struct CoopLinkApp {
 
 impl CoopLinkApp {
     pub fn new(cc: &eframe::CreationContext<'_>, rt: Arc<Runtime>) -> Self {
-        RetroTheme::apply(&cc.egui_ctx);
+        ModernTheme::apply(&cc.egui_ctx);
         let config = AppConfig::load();
         let mut state = AppState::default();
 
@@ -68,10 +72,9 @@ impl CoopLinkApp {
         let tunnel = Arc::new(NetworkTunnel::new());
         let broadcast_relay = Arc::new(BroadcastRelay::new());
         let upnp_mgr = Arc::new(Mutex::new(UpnpManager::new()));
+        let streaming_engine = StreamingEngine::new(config.host_virtual_ip);
 
-        // Diagnostic pare-feu initial
         state.firewall_ok = check_firewall_status();
-
         let logo_texture = load_embedded_logo(&cc.egui_ctx);
 
         let mut app = Self {
@@ -84,6 +87,7 @@ impl CoopLinkApp {
             tunnel,
             broadcast_relay,
             upnp_mgr,
+            streaming_engine,
             to_adapter_tx,
             from_net_rx: Some(from_net_rx),
             to_bcast_tx,
@@ -94,12 +98,12 @@ impl CoopLinkApp {
             interfaces_rx: None,
         };
 
-        // Scan asynchrone des interfaces en tâche de fond (0ms de blocage au démarrage)
         app.trigger_refresh_interfaces();
+        app.add_log(
+            LogLevel::Success,
+            "CoopLink prêt (Architecture P2P directe & Streaming Sunshine/Moonlight intégrés).",
+        );
 
-        app.add_log(LogLevel::Success, "CoopLink initialisé avec succès ! Prêt pour le gaming LAN.");
-
-        // Optimisations automatiques si activées
         if app.config.auto_firewall_rule && !app.state.firewall_ok {
             let port = app.config.listen_port;
             let subnet = format!("{}.0/24", app.config.virtual_subnet_prefix);
@@ -113,7 +117,10 @@ impl CoopLinkApp {
             let adapter_name = app.state.adapter_name.clone();
             let _ = set_adapter_metric(&adapter_name, target_metric);
             app.state.metric_applied = true;
-            app.add_log(LogLevel::Info, &format!("Métrique basse ({}) configurée sur l'interface virtuelle.", target_metric));
+            app.add_log(
+                LogLevel::Info,
+                &format!("Métrique prioritaire ({}) appliquée à l'interface virtuelle.", target_metric),
+            );
         }
 
         app
@@ -134,7 +141,6 @@ impl CoopLinkApp {
 
 impl eframe::App for CoopLinkApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Réception asynchrone des interfaces réseau (évite tout lag/gel lors du changement d'onglet)
         if let Some(ref rx) = self.interfaces_rx {
             if let Ok(ifaces) = rx.try_recv() {
                 self.state.cached_interfaces = ifaces;
@@ -143,23 +149,24 @@ impl eframe::App for CoopLinkApp {
             }
         }
 
-        // Rafraîchissement des statistiques en temps réel
         self.state.total_bytes_tx = self.tunnel.bytes_tx.load(std::sync::atomic::Ordering::Relaxed);
         self.state.total_bytes_rx = self.tunnel.bytes_rx.load(std::sync::atomic::Ordering::Relaxed);
         self.state.broadcast_packets_relayed = self.broadcast_relay.relayed_count();
 
-        // Récupération des pairs et de l'IP virtuelle
         self.state.virtual_ip = *self.tunnel.my_virtual_ip.read();
         self.state.peers = self.tunnel.peers.read().values().cloned().collect();
 
-        // Synchronisation de l'état UPnP
         match self.upnp_mgr.lock().state().clone() {
-            UpnpState::Active { external_ip, mapped_port, .. } => {
+            UpnpState::Active {
+                external_ip,
+                mapped_port,
+                ..
+            } => {
                 self.state.public_ip = Some(external_ip);
-                self.state.upnp_status_text = format!("Ouvert (Port UDP {})", mapped_port);
+                self.state.upnp_status_text = format!("Actif (UDP {})", mapped_port);
             }
             UpnpState::Searching => {
-                self.state.upnp_status_text = "Recherche de la box...".to_string();
+                self.state.upnp_status_text = "Recherche UPnP...".to_string();
             }
             UpnpState::Failed { reason } => {
                 self.state.upnp_status_text = format!("Échec ({})", reason);
@@ -169,178 +176,254 @@ impl eframe::App for CoopLinkApp {
             }
         }
 
-        // En-tête moderne 2026
+        // En-tête Moderne Windows 11 Fluent (Blanc épuré assorti à l'icône CoopLink.png)
         egui::TopBottomPanel::top("top_panel")
             .frame(
                 egui::Frame::none()
-                    .fill(RetroTheme::PANEL_BG)
-                    .inner_margin(12.0)
-                    .stroke(egui::Stroke::new(1.0_f32, RetroTheme::BORDER_SUBTLE)),
+                    .fill(ModernTheme::PANEL_BG)
+                    .inner_margin(egui::Margin::symmetric(18.0, 12.0))
+                    .stroke(egui::Stroke::new(1.0_f32, ModernTheme::BORDER_SUBTLE)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     if let Some(ref logo) = self.logo_texture {
-                        ui.image((logo.id(), egui::vec2(28.0, 28.0)));
-                    } else {
-                        ui.label(RichText::new("⚡").color(RetroTheme::CYAN_VIBRANT).size(20.0));
+                        ui.image((logo.id(), egui::vec2(34.0, 34.0)));
                     }
 
-                    ui.heading(
-                        RichText::new("COOPLINK")
-                            .color(RetroTheme::ICON_WHITE)
-                            .strong()
-                            .size(20.0),
-                    );
-                    ui.label(
-                        RichText::new("// VIRTUAL LAN GAMING ENGINE")
-                            .color(RetroTheme::CYAN_VIBRANT)
-                            .monospace(),
-                    );
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("CoopLink")
+                                    .color(ModernTheme::TEXT_PRIMARY)
+                                    .strong()
+                                    .size(20.0),
+                            );
+                            ui.label(
+                                RichText::new("Réseau Virtuel P2P & Streaming Coopératif")
+                                    .color(ModernTheme::BLUE_ELECTRIC)
+                                    .size(13.5),
+                            );
+                        });
+                    });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let (dot_color, status_label) = match self.state.status {
-                            ConnectionStatus::Hosting => (RetroTheme::GREEN_VIVID, "HÔTE ACTIF"),
-                            ConnectionStatus::Connected => (RetroTheme::CYAN_VIBRANT, "RÉSEAU ACTIF"),
-                            ConnectionStatus::Connecting => (RetroTheme::ORANGE_CORAL, "CONNEXION..."),
-                            ConnectionStatus::Disconnected => (RetroTheme::TEXT_MUTED, "HORS-LIGNE"),
-                            ConnectionStatus::Error => (RetroTheme::RED_ERROR, "ERREUR RÉSEAU"),
+                            ConnectionStatus::Hosting => (ModernTheme::GREEN_VIVID, "Salon Hôte Actif"),
+                            ConnectionStatus::Connected => (ModernTheme::BLUE_ELECTRIC, "Connecté en P2P"),
+                            ConnectionStatus::Connecting => (ModernTheme::ORANGE_CORAL, "Connexion..."),
+                            ConnectionStatus::Disconnected => (ModernTheme::TEXT_MUTED, "Prêt"),
+                            ConnectionStatus::Error => (ModernTheme::RED_ERROR, "Erreur réseau"),
                         };
 
-                        ui.label(RichText::new(status_label).color(dot_color).monospace().strong());
+                        ui.label(RichText::new(status_label).color(dot_color).strong());
                         ui.label(RichText::new("●").color(dot_color).size(14.0));
                     });
                 });
 
-                ui.add_space(8.0);
+                ui.add_space(10.0);
 
-                // Barre d'onglets moderne
+                // Barre de navigation moderne style Windows 11
                 ui.horizontal(|ui| {
-                    tab_button(ui, &mut self.active_tab, ActiveTab::Lobby, "🕹 Lobby Salon");
-                    tab_button(ui, &mut self.active_tab, ActiveTab::Network, "⚡ Réseau & Métrique");
-                    tab_button(ui, &mut self.active_tab, ActiveTab::Firewall, "🛡 Pare-feu");
-                    tab_button(ui, &mut self.active_tab, ActiveTab::Settings, "⚙ Paramètres");
-                    tab_button(ui, &mut self.active_tab, ActiveTab::Console, "📟 Journal Système");
+                    tab_button(ui, &mut self.active_tab, ActiveTab::Lobby, "Salons & Réseau P2P");
+                    tab_button(
+                        ui,
+                        &mut self.active_tab,
+                        ActiveTab::Streaming,
+                        "Streaming & Manettes",
+                    );
+                    tab_button(
+                        ui,
+                        &mut self.active_tab,
+                        ActiveTab::Network,
+                        "Priorité & Cartes",
+                    );
+                    tab_button(ui, &mut self.active_tab, ActiveTab::Firewall, "Pare-feu");
+                    tab_button(ui, &mut self.active_tab, ActiveTab::Settings, "Paramètres");
+                    tab_button(ui, &mut self.active_tab, ActiveTab::Console, "Activité");
                 });
             });
 
-        // Pied de page moderne
+        // Barre d'état inférieure moderne
         egui::TopBottomPanel::bottom("bottom_panel")
             .frame(
                 egui::Frame::none()
-                    .fill(RetroTheme::BG_DARK)
-                    .inner_margin(8.0)
-                    .stroke(egui::Stroke::new(1.0_f32, RetroTheme::BORDER_SUBTLE)),
+                    .fill(ModernTheme::PANEL_BG)
+                    .inner_margin(egui::Margin::symmetric(18.0, 8.0))
+                    .stroke(egui::Stroke::new(1.0_f32, ModernTheme::BORDER_SUBTLE)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new(format!(
-                            "TX: {:.2} KB | RX: {:.2} KB",
+                            "Trafic P2P Direct — Envoyé : {:.2} Ko | Reçu : {:.2} Ko",
                             self.state.total_bytes_tx as f64 / 1024.0,
                             self.state.total_bytes_rx as f64 / 1024.0
                         ))
-                        .color(RetroTheme::TEXT_MUTED)
-                        .monospace()
+                        .color(ModernTheme::TEXT_SECONDARY)
                         .small(),
                     );
 
-                    ui.add_space(15.0);
+                    ui.add_space(16.0);
                     ui.label(
-                        RichText::new(format!("PAIRS CONNECTÉS: {}", self.state.peers.len()))
-                            .color(RetroTheme::NEON_CYAN)
-                            .monospace()
+                        RichText::new(format!("Participants : {}", self.state.peers.len()))
+                            .color(ModernTheme::BLUE_ELECTRIC)
+                            .strong()
                             .small(),
                     );
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            RichText::new("COOPLINK v1.0.0 PROPRIETARY // WIN11")
-                                .color(RetroTheme::TEXT_MUTED)
-                                .monospace()
+                            RichText::new("CoopLink v1.0.0 — Windows 11")
+                                .color(ModernTheme::TEXT_MUTED)
                                 .small(),
                         );
                     });
                 });
             });
 
-        // Zone centrale avec la vue active
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let mut on_host_clicked = false;
-            let mut on_join_clicked = false;
-            let mut on_disconnect_clicked = false;
-            let mut on_apply_metric_clicked = false;
-            let mut on_refresh_interfaces_clicked = false;
-            let mut on_repair_firewall_clicked = false;
-            let mut on_clear_console_clicked = false;
+        // Zone centrale sur fond doux Windows 11 (#F4F7FB)
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::none()
+                    .fill(ModernTheme::BG_APP)
+                    .inner_margin(18.0),
+            )
+            .show(ctx, |ui| {
+                let mut on_host_clicked = false;
+                let mut on_join_clicked = false;
+                let mut on_disconnect_clicked = false;
+                let mut on_apply_metric_clicked = false;
+                let mut on_refresh_interfaces_clicked = false;
+                let mut on_repair_firewall_clicked = false;
+                let mut on_clear_console_clicked = false;
+                let mut on_start_sunshine_host = false;
+                let mut on_stop_sunshine_host = false;
+                let mut on_start_moonlight_client = false;
+                let mut on_stop_moonlight_client = false;
 
-            match self.active_tab {
-                ActiveTab::Lobby => {
-                    LobbyView::render(
-                        ui,
-                        &mut self.state,
-                        &mut self.config,
-                        &self.tunnel,
-                        &mut on_host_clicked,
-                        &mut on_join_clicked,
-                        &mut on_disconnect_clicked,
+                match self.active_tab {
+                    ActiveTab::Lobby => {
+                        LobbyView::render(
+                            ui,
+                            &mut self.state,
+                            &mut self.config,
+                            &self.tunnel,
+                            &mut on_host_clicked,
+                            &mut on_join_clicked,
+                            &mut on_disconnect_clicked,
+                        );
+                    }
+                    ActiveTab::Streaming => {
+                        StreamingView::render(
+                            ui,
+                            &self.state,
+                            &mut self.streaming_engine,
+                            &mut on_start_sunshine_host,
+                            &mut on_stop_sunshine_host,
+                            &mut on_start_moonlight_client,
+                            &mut on_stop_moonlight_client,
+                        );
+                    }
+                    ActiveTab::Network => {
+                        NetworkView::render(
+                            ui,
+                            &mut self.state,
+                            &mut self.config,
+                            &mut on_apply_metric_clicked,
+                            &mut on_refresh_interfaces_clicked,
+                        );
+                    }
+                    ActiveTab::Firewall => {
+                        FirewallView::render(
+                            ui,
+                            &mut self.state,
+                            &mut self.config,
+                            &mut on_repair_firewall_clicked,
+                        );
+                    }
+                    ActiveTab::Settings => {
+                        SettingsView::render(ui, &mut self.config, &mut self.saved_notice);
+                    }
+                    ActiveTab::Console => {
+                        ConsoleView::render(ui, &self.logs, &mut on_clear_console_clicked);
+                    }
+                }
+
+                if on_host_clicked {
+                    self.start_host_node();
+                }
+                if on_join_clicked {
+                    self.start_client_node();
+                }
+                if on_disconnect_clicked {
+                    self.disconnect_node();
+                }
+                if on_apply_metric_clicked {
+                    self.apply_low_metric();
+                }
+                if on_refresh_interfaces_clicked {
+                    self.trigger_refresh_interfaces();
+                }
+                if on_repair_firewall_clicked {
+                    self.repair_firewall();
+                }
+                if on_clear_console_clicked {
+                    self.logs.clear();
+                }
+                if on_start_sunshine_host {
+                    let vip = self.state.virtual_ip.unwrap_or(self.config.host_virtual_ip);
+                    let _ = self.streaming_engine.sunshine_host.start_daemon(vip);
+                    self.add_log(
+                        LogLevel::Game,
+                        &format!(
+                            "Serveur Sunshine démarré et lié exclusivement à l'IP virtuelle {} (Encodeur: {}).",
+                            vip,
+                            self.streaming_engine.sunshine_host.active_encoder.display_name()
+                        ),
                     );
                 }
-                ActiveTab::Network => {
-                    NetworkView::render(
-                        ui,
-                        &mut self.state,
-                        &mut self.config,
-                        &mut on_apply_metric_clicked,
-                        &mut on_refresh_interfaces_clicked,
+                if on_stop_sunshine_host {
+                    self.streaming_engine.sunshine_host.stop_daemon();
+                    self.add_log(LogLevel::Warning, "Partage d'écran Sunshine arrêté.");
+                }
+                if on_start_moonlight_client {
+                    let host_vip = self.streaming_engine.moonlight_client.target_host_vip;
+                    let my_vip = self.state.virtual_ip.unwrap_or(Ipv4Addr::new(10, 244, 0, 2));
+                    let req = self.streaming_engine.pairing.build_pair_request(
+                        1002,
+                        &self.config.player_name,
+                        my_vip,
+                        "x360",
+                    );
+                    let slot = self
+                        .streaming_engine
+                        .sunshine_host
+                        .assign_remote_controller_slot(&self.config.player_name, my_vip);
+                    let ack = self
+                        .streaming_engine
+                        .pairing
+                        .authorize_client_on_host(&req, host_vip, slot);
+                    self.streaming_engine.pairing.complete_pairing_on_client(&ack);
+
+                    let app_name = self.streaming_engine.selected_app_name.clone();
+                    let _ = self
+                        .streaming_engine
+                        .moonlight_client
+                        .start_stream(host_vip, &app_name);
+                    self.add_log(
+                        LogLevel::Success,
+                        &format!(
+                            "Jumelage Zero-Config réussi & Flux Moonlight démarré vers {} (Assigné: Joueur {}).",
+                            host_vip, slot
+                        ),
                     );
                 }
-                ActiveTab::Firewall => {
-                    FirewallView::render(
-                        ui,
-                        &mut self.state,
-                        &mut self.config,
-                        &mut on_repair_firewall_clicked,
-                    );
+                if on_stop_moonlight_client {
+                    self.streaming_engine.moonlight_client.stop_stream();
+                    self.add_log(LogLevel::Info, "Flux Moonlight fermé.");
                 }
-                ActiveTab::Settings => {
-                    SettingsView::render(ui, &mut self.config, &mut self.saved_notice);
-                }
-                ActiveTab::Console => {
-                    ConsoleView::render(ui, &self.logs, &mut on_clear_console_clicked);
-                }
-            }
+            });
 
-            // Gestion des clics d'actions
-            if on_host_clicked {
-                self.start_host_node();
-            }
-
-            if on_join_clicked {
-                self.start_client_node();
-            }
-
-            if on_disconnect_clicked {
-                self.disconnect_node();
-            }
-
-            if on_apply_metric_clicked {
-                self.apply_low_metric();
-            }
-
-            if on_refresh_interfaces_clicked {
-                self.trigger_refresh_interfaces();
-            }
-
-            if on_repair_firewall_clicked {
-                self.repair_firewall();
-            }
-
-            if on_clear_console_clicked {
-                self.logs.clear();
-            }
-        });
-
-        // Demande de redessin continu pour l'animation et la réactivité réseau (10 FPS en idle)
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 }
@@ -356,7 +439,7 @@ impl CoopLinkApp {
 
         self.add_log(
             LogLevel::Game,
-            &format!("Création du salon hébergé '{}' sur le port UDP {}...", room_code, port),
+            &format!("Création du salon '{}' (Port UDP P2P {})...", room_code, port),
         );
 
         let tunnel = self.tunnel.clone();
@@ -388,25 +471,26 @@ impl CoopLinkApp {
             }
         });
 
-        self.apply_low_metric();
-        self.add_log(LogLevel::Success, &format!("Nœud hébergé actif ! IP Virtuelle attribuée: {}", host_ip));
+        // Démarre automatiquement le service Sunshine lié à l'IP virtuelle de l'hôte
+        let _ = self.streaming_engine.sunshine_host.start_daemon(host_ip);
 
-        // Déclenchement de l'ouverture automatique de port UPnP sur la Box
+        self.apply_low_metric();
+        self.add_log(
+            LogLevel::Success,
+            &format!(
+                "Salon hébergé actif sur {} (Sunshine prêt pour le jumelage Zero-Config).",
+                host_ip
+            ),
+        );
+
         if self.config.enable_upnp {
-            self.state.upnp_status_text = "Recherche de la box UPnP...".to_string();
+            self.state.upnp_status_text = "Recherche UPnP...".to_string();
             let upnp = self.upnp_mgr.clone();
             let listen_port = port;
 
             self.rt.spawn_blocking(move || {
                 let mut mgr = upnp.lock();
-                match mgr.open_port(listen_port) {
-                    Ok(ext_ip) => {
-                        tracing::info!("UPnP: Port {} ouvert avec succès sur la box (IP publique: {})", listen_port, ext_ip);
-                    }
-                    Err(e) => {
-                        tracing::warn!("UPnP non disponible ou échoué: {}", e);
-                    }
-                }
+                let _ = mgr.open_port(listen_port);
             });
         }
     }
@@ -418,7 +502,7 @@ impl CoopLinkApp {
             Err(_) => match format!("{}:{}", server_str, self.config.listen_port).parse() {
                 Ok(addr) => addr,
                 Err(e) => {
-                    self.add_log(LogLevel::Error, &format!("Adresse de serveur invalide: {}", e));
+                    self.add_log(LogLevel::Error, &format!("Adresse invalide: {}", e));
                     return;
                 }
             },
@@ -431,7 +515,7 @@ impl CoopLinkApp {
 
         self.add_log(
             LogLevel::Info,
-            &format!("Tentative de connexion au nœud {} pour la salle '{}'...", server_addr, room_code),
+            &format!("Connexion P2P au salon '{}' ({})...", room_code, server_addr),
         );
 
         let tunnel = self.tunnel.clone();
@@ -465,19 +549,24 @@ impl CoopLinkApp {
 
         self.apply_low_metric();
         self.state.status = ConnectionStatus::Connected;
-        self.add_log(LogLevel::Success, "Connecté avec succès au salon distant !");
+        self.add_log(
+            LogLevel::Success,
+            "Connexion directe P2P établie ! Vous pouvez lancer le streaming ou votre jeu.",
+        );
     }
 
     fn disconnect_node(&mut self) {
         self.tunnel.stop();
         self.broadcast_relay.stop();
+        self.streaming_engine.sunshine_host.stop_daemon();
+        self.streaming_engine.moonlight_client.stop_stream();
         self.upnp_mgr.lock().close_port();
         self.state.public_ip = None;
         self.state.status = ConnectionStatus::Disconnected;
         self.state.role = NodeRole::Idle;
         self.state.virtual_ip = None;
         self.state.peers.clear();
-        self.add_log(LogLevel::Warning, "Déconnecté de la salle de jeu. Port UPnP refermé.");
+        self.add_log(LogLevel::Warning, "Session fermée.");
     }
 
     fn apply_low_metric(&mut self) {
@@ -485,10 +574,6 @@ impl CoopLinkApp {
         let adapter_name = self.state.adapter_name.clone();
         let _ = set_adapter_metric(&adapter_name, metric);
         self.state.metric_applied = true;
-        self.add_log(
-            LogLevel::Success,
-            &format!("Métrique basse ({}) appliquée à '{}' (Priorité LAN active).", metric, adapter_name),
-        );
     }
 
     pub fn trigger_refresh_interfaces(&mut self) {
@@ -510,10 +595,10 @@ impl CoopLinkApp {
         match setup_firewall_rules(port, &subnet) {
             Ok(_) => {
                 self.state.firewall_ok = true;
-                self.add_log(LogLevel::Success, "Règles pare-feu Windows créées avec succès !");
+                self.add_log(LogLevel::Success, "Règles pare-feu Windows appliquées.");
             }
             Err(e) => {
-                self.add_log(LogLevel::Error, &format!("Erreur lors de la configuration du pare-feu: {}", e));
+                self.add_log(LogLevel::Error, &format!("Erreur pare-feu: {}", e));
             }
         }
     }
@@ -522,23 +607,23 @@ impl CoopLinkApp {
 fn tab_button(ui: &mut egui::Ui, current: &mut ActiveTab, tab: ActiveTab, label: &str) {
     let is_selected = *current == tab;
     let text = if is_selected {
-        RichText::new(label).color(RetroTheme::ICON_WHITE).strong()
+        RichText::new(label).color(Color32::WHITE).strong()
     } else {
-        RichText::new(label).color(RetroTheme::TEXT_SECONDARY)
+        RichText::new(label).color(ModernTheme::TEXT_SECONDARY)
     };
 
     let btn = egui::Button::new(text)
         .fill(if is_selected {
-            RetroTheme::CARD_BG_HOVER
+            ModernTheme::BLUE_ELECTRIC
         } else {
-            RetroTheme::PANEL_BG
+            ModernTheme::SUBTLE_BG
         })
         .stroke(if is_selected {
-            egui::Stroke::new(1.5_f32, RetroTheme::CYAN_VIBRANT)
+            egui::Stroke::new(1.0_f32, ModernTheme::BLUE_ELECTRIC)
         } else {
-            egui::Stroke::new(1.0_f32, RetroTheme::BORDER_SUBTLE)
+            egui::Stroke::new(1.0_f32, ModernTheme::BORDER_SUBTLE)
         })
-        .rounding(egui::Rounding::same(7.0));
+        .rounding(egui::Rounding::same(8.0));
 
     if ui.add(btn).clicked() {
         *current = tab;
