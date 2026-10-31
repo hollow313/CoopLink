@@ -32,12 +32,14 @@ pub struct InstallerApp {
     install_started: Arc<AtomicBool>,
     install_complete: Arc<AtomicBool>,
     error_msg: Option<String>,
+    logo_texture: Option<egui::TextureHandle>,
 }
 
 impl InstallerApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         setup_installer_theme(&cc.egui_ctx);
         let default_dir = get_default_install_dir();
+        let logo_texture = load_installer_logo(&cc.egui_ctx);
 
         Self {
             step: InstallStep::Welcome,
@@ -52,6 +54,7 @@ impl InstallerApp {
             install_started: Arc::new(AtomicBool::new(false)),
             install_complete: Arc::new(AtomicBool::new(false)),
             error_msg: None,
+            logo_texture,
         }
     }
 }
@@ -68,17 +71,21 @@ impl eframe::App for InstallerApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("⚡").color(Color32::from_rgb(0, 255, 148)).size(26.0));
+                    if let Some(ref logo) = self.logo_texture {
+                        ui.image((logo.id(), egui::vec2(36.0, 36.0)));
+                    } else {
+                        ui.label(RichText::new("⚡").color(Color32::from_rgb(0, 210, 255)).size(26.0));
+                    }
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
                             ui.heading(
                                 RichText::new("COOPLINK")
-                                    .color(Color32::from_rgb(0, 255, 148))
+                                    .color(Color32::WHITE)
                                     .strong(),
                             );
                             ui.label(
                                 RichText::new("// VIRTUAL LAN GAMING ENGINE")
-                                    .color(Color32::from_rgb(0, 230, 255))
+                                    .color(Color32::from_rgb(0, 210, 255))
                                     .monospace()
                                     .small(),
                             );
@@ -563,4 +570,16 @@ fn setup_installer_theme(ctx: &egui::Context) {
     visuals.window_fill = Color32::from_rgb(18, 24, 38);
     style.visuals = visuals;
     ctx.set_style(style);
+}
+
+fn load_installer_logo(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let image_bytes = include_bytes!("../../../images/logo.jpg");
+    if let Ok(dynamic_img) = image::load_from_memory(image_bytes) {
+        let rgba = dynamic_img.to_rgba8();
+        let size = [rgba.width() as usize, rgba.height() as usize];
+        let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba.into_raw());
+        Some(ctx.load_texture("installer_logo", color_image, egui::TextureOptions::LINEAR))
+    } else {
+        None
+    }
 }

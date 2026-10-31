@@ -1,0 +1,23 @@
+services:
+  cooplink-server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: ghcr.io/hollow313/cooplink-server:latest
+    container_name: cooplink-server
+    restart: unless-stopped
+    user: "568:568"
+    ports:
+      # Port UDP gaming (coordination, attribution des IDs, traversée NAT et relais)
+      - "30024:30024/udp"
+      # Port Web (Interface d'administration et monitoring en direct)
+      - "8080:8080/tcp"
+    environment:
+      - PORT_UDP=30024
+      - PORT_WEB=8080
+      - DATA_DIR=/data
+      - SERVER_NAME=CoopLink Official Hub #1
+      - RUST_LOG=info
+    volumes:
+      # Dossier bindé pour persister les configurations et l'historique
+      - ./data:/data

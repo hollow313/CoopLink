@@ -1,3 +1,4 @@
+pub mod logo;
 pub mod retro_theme;
 pub mod views;
 
@@ -11,7 +12,8 @@ use crate::platform::windows::metric::{is_metric_priority_active, set_adapter_me
 use crate::types::{AppState, ConnectionStatus, LogEntry, LogLevel, NodeRole};
 use chrono::Local;
 use eframe::egui;
-use egui::{Color32, RichText};
+use egui::{Color32, RichText, TextureHandle};
+use logo::load_embedded_logo;
 use parking_lot::Mutex;
 use retro_theme::RetroTheme;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -49,6 +51,7 @@ pub struct CoopLinkApp {
     pub from_bcast_rx: Option<mpsc::Receiver<(u16, Vec<u8>)>>,
     pub to_tunnel_bcast_tx: mpsc::Sender<(u16, Vec<u8>)>,
     pub from_tunnel_bcast_rx: Option<mpsc::Receiver<(u16, Vec<u8>)>>,
+    pub logo_texture: Option<TextureHandle>,
 }
 
 impl CoopLinkApp {
@@ -69,6 +72,8 @@ impl CoopLinkApp {
         state.firewall_ok = check_firewall_status();
         state.metric_applied = is_metric_priority_active(&state.adapter_name, config.target_metric);
 
+        let logo_texture = load_embedded_logo(&cc.egui_ctx);
+
         let mut app = Self {
             config,
             state,
@@ -85,6 +90,7 @@ impl CoopLinkApp {
             from_bcast_rx: Some(from_bcast_rx),
             to_tunnel_bcast_tx,
             from_tunnel_bcast_rx: Some(from_tunnel_bcast_rx),
+            logo_texture,
         };
 
         app.add_log(LogLevel::Success, "CoopLink initialisé avec succès ! Prêt pour le gaming LAN.");
@@ -160,15 +166,21 @@ impl eframe::App for CoopLinkApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
+                    if let Some(ref logo) = self.logo_texture {
+                        ui.image((logo.id(), egui::vec2(28.0, 28.0)));
+                    } else {
+                        ui.label(RichText::new("⚡").color(RetroTheme::CYAN_VIBRANT).size(20.0));
+                    }
+
                     ui.heading(
-                        RichText::new("⚡ COOPLINK")
-                            .color(RetroTheme::NEON_GREEN)
+                        RichText::new("COOPLINK")
+                            .color(RetroTheme::ICON_WHITE)
                             .strong()
                             .size(20.0),
                     );
                     ui.label(
                         RichText::new("// VIRTUAL LAN GAMING ENGINE")
-                            .color(RetroTheme::NEON_CYAN)
+                            .color(RetroTheme::CYAN_VIBRANT)
                             .monospace(),
                     );
 
