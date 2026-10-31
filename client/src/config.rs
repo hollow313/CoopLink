@@ -6,7 +6,7 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
 fn default_central_server() -> String {
-    "127.0.0.1:30024".to_string()
+    "192.168.1.200:30026".to_string()
 }
 
 fn default_instance_uuid() -> u64 {
@@ -40,6 +40,8 @@ pub struct AppConfig {
     #[serde(default = "default_true")]
     pub close_to_background: bool,
     #[serde(default)]
+    pub close_behavior_asked: bool,
+    #[serde(default)]
     pub start_with_windows: bool,
     pub room_password: String,
     pub scanline_intensity: f32,
@@ -65,6 +67,7 @@ impl Default for AppConfig {
             instance_uuid: default_instance_uuid(),
             language: Language::from_os_locale(),
             close_to_background: true,
+            close_behavior_asked: false,
             start_with_windows: false,
             room_password: String::new(),
             scanline_intensity: 0.15,
@@ -82,7 +85,10 @@ impl AppConfig {
         let path = Self::config_path();
         if path.exists() {
             if let Ok(data) = fs::read_to_string(&path) {
-                if let Ok(config) = serde_json::from_str::<AppConfig>(&data) {
+                if let Ok(mut config) = serde_json::from_str::<AppConfig>(&data) {
+                    if config.central_server_address == "127.0.0.1:30024" {
+                        config.central_server_address = default_central_server();
+                    }
                     return config;
                 }
             }

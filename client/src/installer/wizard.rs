@@ -3,7 +3,7 @@ use eframe::egui;
 use egui::{Color32, CursorIcon, FontFamily, FontId, RichText, Rounding, ScrollArea, Stroke, TextStyle, Ui};
 use std::env;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -84,6 +84,8 @@ pub enum InstallStep {
     OptionsAndDrivers,
     Installing,
     Finished,
+    Uninstalling,
+    UninstallFinished,
 }
 
 pub struct InstallerApp {
@@ -99,7 +101,9 @@ pub struct InstallerApp {
     hw_check: HardwareDriverCheck,
     launch_on_finish: bool,
     progress: f32,
+    progress_pct: Arc<AtomicU32>,
     status_label: String,
+    status_shared: Arc<parking_lot::Mutex<String>>,
     install_started: Arc<AtomicBool>,
     install_complete: Arc<AtomicBool>,
     error_msg: Option<String>,
@@ -113,9 +117,20 @@ impl InstallerApp {
         let logo_texture = load_installer_logo(&cc.egui_ctx);
         let hw_check = check_system_drivers();
 
-        Self {
+        let is_uninstall_mode = env::args().any(|a| a.to_lowercase().contains("uninstall"))
+            || env::current_exe()
+                .ok()
+                .and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_lowercase()))
+                .map(|name| name.contains("unins"))
+                .unwrap_or(false);
+
+        let mut app = Self {
             lang: InstallerLang::from_os(),
-            step: InstallStep::Welcome,
+            step: if is_uninstall_mode {
+                InstallStep::Uninstalling
+            } else {
+                InstallStep::Welcome
+            },
             install_dir: default_dir.to_string_lossy().to_string(),
             license_accepted: false,
             create_desktop_shortcut: true,
@@ -126,12 +141,22 @@ impl InstallerApp {
             hw_check,
             launch_on_finish: true,
             progress: 0.0,
-            status_label: "Prêt pour l'installation...".to_string(),
+            progress_pct: Arc::new(AtomicU32::new(0)),
+            status_label: "Préparation de l'installation...".to_string(),
+            status_shared: Arc::new(parking_lot::Mutex::new(
+                "Préparation de l'installation...".to_string(),
+            )),
             install_started: Arc::new(AtomicBool::new(false)),
             install_complete: Arc::new(AtomicBool::new(false)),
             error_msg: None,
             logo_texture,
+        };
+
+        if is_uninstall_mode {
+            app.start_uninstallation();
         }
+
+        app
     }
 }
 
@@ -149,6 +174,8 @@ fn draw_dot(ui: &mut Ui, color: Color32, radius: f32) {
 impl eframe::App for InstallerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let lang = self.lang;
+        self.progress = (self.progress_pct.load(Ordering::Relaxed) as f32 / 100.0).clamp(0.0, 1.0);
+        self.status_label = self.status_shared.lock().clone();
 
         egui::TopBottomPanel::top("installer_header")
             .frame(
@@ -218,6 +245,16 @@ impl eframe::App for InstallerApp {
                                 InstallerLang::Es => "Instalación completada con éxito",
                                 InstallerLang::De => "Installation erfolgreich abgeschlossen",
                                 InstallerLang::Pt => "Instalação concluída com sucesso",
+                            },
+                            InstallStep::Uninstalling => match lang {
+                                InstallerLang::Fr => "Désinstallation complète de CoopLink en cours...",
+                                InstallerLang::En => "Uninstalling CoopLink...",
+                                _ => "Désinstallation en cours...",
+                            },
+                            InstallStep::UninstallFinished => match lang {
+                                InstallerLang::Fr => "Désinstallation terminée avec succès",
+                                InstallerLang::En => "Uninstallation completed",
+                                _ => "Désinstallation terminée",
                             },
                         };
                         ui.label(
@@ -386,6 +423,24 @@ impl eframe::App for InstallerApp {
                                     std::process::exit(0);
                                 }
                             }
+                            InstallStep::Uninstalling => {
+                                ui.label(
+                                    RichText::new("Désinstallation...")
+                                        .color(WIN11_ORANGE)
+                                        .strong(),
+                                );
+                            }
+                            InstallStep::UninstallFinished => {
+                                let close_btn = egui::Button::new(
+                                    RichText::new("Fermer").color(Color32::WHITE).strong(),
+                                )
+                                .fill(WIN11_BLUE)
+                                .rounding(Rounding::same(6.0))
+                                .min_size(egui::vec2(110.0, 34.0));
+                                if ui.add(close_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                                    std::process::exit(0);
+                                }
+                            }
                         }
                     });
                 });
@@ -408,16 +463,20 @@ impl eframe::App for InstallerApp {
                         InstallStep::License => self.render_license(ui),
                         InstallStep::Destination => self.render_destination(ui),
                         InstallStep::OptionsAndDrivers => self.render_options(ui),
-                        InstallStep::Installing => self.render_installing(ui),
+                        InstallStep::Installing | InstallStep::Uninstalling => self.render_installing(ui),
                         InstallStep::Finished => self.render_finished(ui),
+                        InstallStep::UninstallFinished => self.render_uninstall_finished(ui),
                     });
             });
 
         if self.step == InstallStep::Installing && self.install_complete.load(Ordering::Relaxed) {
             self.step = InstallStep::Finished;
         }
+        if self.step == InstallStep::Uninstalling && self.install_complete.load(Ordering::Relaxed) {
+            self.step = InstallStep::UninstallFinished;
+        }
 
-        ctx.request_repaint_after(Duration::from_millis(100));
+        ctx.request_repaint_after(Duration::from_millis(80));
     }
 }
 
@@ -658,16 +717,39 @@ impl InstallerApp {
 
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Dossier :").color(WIN11_TEXT_MAIN).strong());
-                ui.add(egui::TextEdit::singleline(&mut self.install_dir).desired_width(360.0));
-                if ui.button("Program Files").clicked() {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.install_dir)
+                        .desired_width((ui.available_width() - 8.0).max(200.0)),
+                );
+            });
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .button("Dossier Program Files (Standard)")
+                    .on_hover_cursor(CursorIcon::PointingHand)
+                    .clicked()
+                {
                     self.install_dir = get_default_install_dir().to_string_lossy().to_string();
                 }
-                if ui.button("AppData Local").clicked() {
+                if ui
+                    .button("Dossier Utilisateur (AppData Local)")
+                    .on_hover_cursor(CursorIcon::PointingHand)
+                    .clicked()
+                {
                     self.install_dir = get_user_local_install_dir().to_string_lossy().to_string();
+                }
+                if ui
+                    .button("Parcourir...")
+                    .on_hover_cursor(CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    if let Some(chosen) = browse_install_folder(&self.install_dir) {
+                        self.install_dir = chosen;
+                    }
                 }
             });
 
-            ui.add_space(12.0);
+            ui.add_space(10.0);
             egui::Frame::none()
                 .fill(WIN11_SUBTLE)
                 .stroke(Stroke::new(1.0_f32, WIN11_BORDER))
@@ -789,20 +871,25 @@ impl InstallerApp {
     }
 
     fn render_installing(&self, ui: &mut Ui) {
+        let is_unins = self.step == InstallStep::Uninstalling;
         ui.vertical_centered(|ui| {
             ui.add_space(30.0);
             ui.label(
-                RichText::new("Installation de CoopLink et des pilotes virtuels en cours...")
-                    .color(WIN11_TEXT_MAIN)
-                    .strong()
-                    .size(17.0),
+                RichText::new(if is_unins {
+                    "Désinstallation de CoopLink et nettoyage des raccourcis en cours..."
+                } else {
+                    "Installation de CoopLink et des pilotes virtuels en cours..."
+                })
+                .color(WIN11_TEXT_MAIN)
+                .strong()
+                .size(17.0),
             );
             ui.add_space(18.0);
 
             let progress_bar = egui::ProgressBar::new(self.progress)
                 .show_percentage()
                 .animate(true)
-                .fill(WIN11_BLUE);
+                .fill(if is_unins { WIN11_ORANGE } else { WIN11_BLUE });
 
             ui.add_sized([ui.available_width() - 40.0, 22.0], progress_bar);
 
@@ -813,6 +900,28 @@ impl InstallerApp {
                 ui.add_space(10.0);
                 ui.label(RichText::new(format!("Erreur : {}", err)).color(Color32::RED));
             }
+        });
+    }
+
+    fn render_uninstall_finished(&self, ui: &mut Ui) {
+        ui.vertical(|ui| {
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                draw_dot(ui, WIN11_GREEN, 5.5);
+                ui.label(
+                    RichText::new("CoopLink a été entièrement désinstallé")
+                        .color(WIN11_GREEN)
+                        .strong()
+                        .size(18.0),
+                );
+            });
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new(
+                    "L'icône du Bureau, le raccourci du Menu Démarrer, les entrées du registre et tous les fichiers d'installation ont été supprimés.",
+                )
+                .color(WIN11_TEXT_SUB),
+            );
         });
     }
 
@@ -859,74 +968,90 @@ impl InstallerApp {
             return;
         }
 
+        self.progress_pct.store(5, Ordering::SeqCst);
+        *self.status_shared.lock() = "Étape 1/5 — Création de l'arborescence logicielle CoopLink...".to_string();
+
         let target_dir = PathBuf::from(&self.install_dir);
         let create_desktop = self.create_desktop_shortcut;
         let create_start = self.create_start_menu_shortcut;
         let setup_firewall = self.configure_firewall;
         let need_gamepad_drv = self.install_gamepad_driver && !self.hw_check.gamepad_bus_present;
         let need_vdd_drv = self.install_virtual_display_driver;
+        let hw_info = self.hw_check.clone();
         let complete_flag = self.install_complete.clone();
+        let prog_pct = self.progress_pct.clone();
+        let status_txt = self.status_shared.clone();
 
         thread::spawn(move || {
+            thread::sleep(Duration::from_millis(220));
+            prog_pct.store(20, Ordering::SeqCst);
+            *status_txt.lock() = "Étape 2/5 — Déploiement des binaires (cooplink.exe, services, moteurs DLL)...".to_string();
+
             let current_exe = env::current_exe().unwrap_or_default();
             let source_cooplink = current_exe
                 .parent()
                 .map(|p| p.join("cooplink.exe"))
                 .unwrap_or_else(|| PathBuf::from("cooplink.exe"));
 
-            let hw_info = check_system_drivers();
             let effective_dir = populate_complete_software_tree(
                 &target_dir,
                 &source_cooplink,
                 &current_exe,
                 &hw_info,
-                need_gamepad_drv,
-                need_vdd_drv,
             );
-
             let target_exe = effective_dir.join("cooplink.exe");
 
-            if create_desktop {
-                if let Ok(user_profile) = env::var("USERPROFILE") {
-                    let desktop_lnk = PathBuf::from(user_profile)
-                        .join("Desktop")
-                        .join("CoopLink.lnk");
-                    let _ = create_windows_shortcut(
-                        &target_exe,
-                        &desktop_lnk,
-                        "CoopLink - Réseau P2P & Partage de Jeu Co-op",
-                    );
-                }
-            }
+            thread::sleep(Duration::from_millis(250));
+            prog_pct.store(48, Ordering::SeqCst);
+            *status_txt.lock() = "Étape 3/5 — Vérification et installation des pilotes virtuels (Bus Manettes & Affichage)...".to_string();
 
-            if create_start {
-                if let Ok(app_data) = env::var("APPDATA") {
-                    let start_menu = PathBuf::from(app_data)
-                        .join("Microsoft")
-                        .join("Windows")
-                        .join("Start Menu")
-                        .join("Programs")
-                        .join("CoopLink.lnk");
-                    let _ = create_windows_shortcut(
-                        &target_exe,
-                        &start_menu,
-                        "CoopLink - Réseau P2P & Partage de Jeu Co-op",
-                    );
-                }
-            }
+            install_missing_drivers_silently(&effective_dir, need_gamepad_drv, need_vdd_drv);
+
+            thread::sleep(Duration::from_millis(220));
+            prog_pct.store(72, Ordering::SeqCst);
+            *status_txt.lock() = "Étape 4/5 — Création des raccourcis Bureau et Menu Démarrer...".to_string();
+
+            let _ = create_desktop_and_start_shortcuts(&target_exe, create_desktop, create_start);
+
+            thread::sleep(Duration::from_millis(220));
+            prog_pct.store(90, Ordering::SeqCst);
+            *status_txt.lock() = "Étape 5/5 — Configuration silencieuse du Pare-feu Windows & Registre...".to_string();
 
             if setup_firewall {
                 let _ = setup_silent_firewall(&target_exe);
             }
 
             let _ = register_in_windows_uninstall(&effective_dir, &target_exe);
-            thread::sleep(Duration::from_millis(150));
+
+            prog_pct.store(100, Ordering::SeqCst);
+            *status_txt.lock() = "Installation terminée avec succès (100%) !".to_string();
+            thread::sleep(Duration::from_millis(260));
 
             complete_flag.store(true, Ordering::SeqCst);
         });
+    }
 
-        self.progress = 1.0;
-        self.status_label = "Installation du logiciel et vérification des pilotes système...".to_string();
+    fn start_uninstallation(&mut self) {
+        if self.install_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        self.progress_pct.store(15, Ordering::SeqCst);
+        *self.status_shared.lock() = "Suppression des raccourcis Bureau, Menu Démarrer et fichiers...".to_string();
+
+        let complete_flag = self.install_complete.clone();
+        let prog_pct = self.progress_pct.clone();
+        let status_txt = self.status_shared.clone();
+
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(250));
+            prog_pct.store(55, Ordering::SeqCst);
+            *status_txt.lock() = "Suppression de l'icône du Bureau et nettoyage du registre...".to_string();
+            let _ = perform_complete_uninstall();
+            prog_pct.store(100, Ordering::SeqCst);
+            *status_txt.lock() = "Désinstallation terminée (100%) !".to_string();
+            thread::sleep(Duration::from_millis(250));
+            complete_flag.store(true, Ordering::SeqCst);
+        });
     }
 }
 

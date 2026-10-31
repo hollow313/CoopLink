@@ -66,6 +66,8 @@ pub struct CoopLinkApp {
     pub from_tunnel_bcast_rx: Option<mpsc::Receiver<(u16, Vec<u8>)>>,
     pub logo_texture: Option<TextureHandle>,
     pub interfaces_rx: Option<crossbeam_channel::Receiver<Vec<InterfaceMetricInfo>>>,
+    pub show_close_prompt_modal: bool,
+    pub remember_close_choice: bool,
 }
 
 impl CoopLinkApp {
@@ -125,6 +127,8 @@ impl CoopLinkApp {
             from_tunnel_bcast_rx: Some(from_tunnel_bcast_rx),
             logo_texture,
             interfaces_rx: None,
+            show_close_prompt_modal: false,
+            remember_close_choice: true,
         };
 
         app.trigger_refresh_interfaces();
@@ -198,14 +202,117 @@ impl CoopLinkApp {
 
 impl eframe::App for CoopLinkApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Interception de la fermeture par la croix (X) -> Réduit le logiciel en arrière-plan pour laisser le jeu au premier plan
-        if ctx.input(|i| i.viewport().close_requested()) && self.config.close_to_background {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-            self.add_log(
-                LogLevel::Info,
-                "CoopLink réduit en arrière-plan (votre tunnel P2P et le partage de jeu continuent).",
-            );
+        // Interception de la fermeture par la croix (X) -> Demande la 1re fois, puis applique le choix mémorisé
+        if ctx.input(|i| i.viewport().close_requested()) {
+            if !self.config.close_behavior_asked {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.show_close_prompt_modal = true;
+            } else if self.config.close_to_background {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                self.add_log(
+                    LogLevel::Info,
+                    "CoopLink réduit en arrière-plan (votre tunnel P2P et le partage de jeu continuent).",
+                );
+            } else {
+                self.disconnect_node();
+            }
+        }
+
+        if self.show_close_prompt_modal {
+            let lang = self.config.language;
+            egui::Window::new(match lang {
+                Language::Fr => "Fermeture de CoopLink — Que souhaitez-vous faire ?",
+                Language::En => "Closing CoopLink — What would you like to do?",
+                Language::Es => "Cerrando CoopLink — ¿Qué deseas hacer?",
+                Language::De => "CoopLink schließen — Was möchtest du tun?",
+                Language::Pt => "Fechar CoopLink — O que pretende fazer?",
+            })
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .fixed_size(egui::vec2(480.0, 210.0))
+            .show(ctx, |ui| {
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(match lang {
+                        Language::Fr => "Souhaitez-vous réduire CoopLink en arrière-plan (pour ne pas couper votre salon P2P ni le partage de jeu) ou fermer complètement l'application ?",
+                        Language::En => "Would you like to minimize CoopLink to the background (to keep your P2P room and game share running) or quit the application completely?",
+                        Language::Es => "¿Deseas minimizar CoopLink en segundo plano (para mantener tu sala P2P activa) o cerrar completamente la aplicación?",
+                        Language::De => "Möchtest du CoopLink im Hintergrund minimieren (damit dein P2P-Raum aktiv bleibt) oder die Anwendung komplett beenden?",
+                        Language::Pt => "Deseja minimizar o CoopLink em segundo plano (para manter a sala P2P ativa) ou fechar completamente a aplicação?",
+                    })
+                    .color(ModernTheme::TEXT_SECONDARY)
+                    .size(13.5),
+                );
+                ui.add_space(12.0);
+                ui.checkbox(
+                    &mut self.remember_close_choice,
+                    RichText::new(match lang {
+                        Language::Fr => "Mémoriser mon choix et ne plus me demander (modifiable dans Paramètres)",
+                        Language::En => "Remember my choice and don't ask again (can be changed in Settings)",
+                        _ => "Mémoriser mon choix (modifiable dans Paramètres)",
+                    })
+                    .color(ModernTheme::TEXT_PRIMARY)
+                    .strong(),
+                );
+                ui.add_space(14.0);
+                ui.horizontal_wrapped(|ui| {
+                    let min_btn = egui::Button::new(
+                        RichText::new(match lang {
+                            Language::Fr => "Réduire en arrière-plan",
+                            Language::En => "Minimize to Background",
+                            _ => "Réduire en arrière-plan",
+                        })
+                        .color(Color32::WHITE)
+                        .strong(),
+                    )
+                    .fill(ModernTheme::BLUE_ELECTRIC)
+                    .rounding(egui::Rounding::same(8.0))
+                    .min_size(egui::vec2(190.0, 36.0));
+
+                    if ui.add(min_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                        self.config.close_to_background = true;
+                        if self.remember_close_choice {
+                            self.config.close_behavior_asked = true;
+                        }
+                        let _ = self.config.save();
+                        self.show_close_prompt_modal = false;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    }
+
+                    let quit_btn = egui::Button::new(
+                        RichText::new(match lang {
+                            Language::Fr => "Fermer l'application",
+                            Language::En => "Quit Application",
+                            _ => "Fermer l'application",
+                        })
+                        .color(Color32::WHITE)
+                        .strong(),
+                    )
+                    .fill(ModernTheme::RED_ERROR)
+                    .rounding(egui::Rounding::same(8.0))
+                    .min_size(egui::vec2(170.0, 36.0));
+
+                    if ui.add(quit_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                        self.config.close_to_background = false;
+                        if self.remember_close_choice {
+                            self.config.close_behavior_asked = true;
+                        }
+                        let _ = self.config.save();
+                        self.disconnect_node();
+                        std::process::exit(0);
+                    }
+
+                    if ui
+                        .add_sized([80.0, 36.0], egui::Button::new("Annuler"))
+                        .on_hover_cursor(CursorIcon::PointingHand)
+                        .clicked()
+                    {
+                        self.show_close_prompt_modal = false;
+                    }
+                });
+            });
         }
 
         if let Some(ref rx) = self.interfaces_rx {

@@ -60,6 +60,24 @@ pub fn run_hidden_powershell(script: &str) -> Result<()> {
     Ok(())
 }
 
+/// Ouvre le sélecteur de dossier natif Windows
+pub fn browse_install_folder(current: &str) -> Option<String> {
+    let ps = format!(
+        "Add-Type -AssemblyName System.Windows.Forms; \
+         $dlg = New-Object System.Windows.Forms.FolderBrowserDialog; \
+         $dlg.Description = 'Sélectionnez le dossier d''installation de CoopLink'; \
+         $dlg.SelectedPath = '{}'; \
+         if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ Write-Output $dlg.SelectedPath }}",
+        current.replace('\'', "''")
+    );
+    if let Ok(out) = run_hidden_powershell_output(&ps) {
+        if !out.is_empty() {
+            return Some(out);
+        }
+    }
+    None
+}
+
 /// Détecte la langue de l'OS Windows pour initialiser l'installateur automatiquement en FR ou US/EN
 pub fn detect_os_locale() -> String {
     run_hidden_powershell_output("(Get-UICulture).Name")
@@ -121,7 +139,7 @@ pub fn check_system_drivers() -> HardwareDriverCheck {
         || upper.contains("AMD")
         || upper.contains("RADEON")
         || upper.contains("INTEL")
-        || ! preferred_gpu.is_empty();
+        || !preferred_gpu.is_empty();
 
     let pnp_raw = run_hidden_powershell_output(
         "Get-CimInstance Win32_SystemDriver | Select-Object -ExpandProperty Name",
@@ -154,10 +172,7 @@ pub fn populate_complete_software_tree(
     source_exe: &Path,
     installer_exe: &Path,
     hw_check: &HardwareDriverCheck,
-    install_gamepad_bus: bool,
-    install_virtual_display: bool,
 ) -> PathBuf {
-    // 1. S'assurer que le dossier cible est accessible en écriture (ou utiliser l'élévation PowerShell si C:\Program Files est protégé)
     if fs::create_dir_all(target_dir).is_err() {
         let dir_escaped = target_dir.to_string_lossy().replace('\'', "''");
         let user_escaped = env::var("USERNAME").unwrap_or_else(|_| "Users".to_string());
@@ -169,7 +184,6 @@ pub fn populate_complete_software_tree(
         let _ = fs::create_dir_all(target_dir);
     }
 
-    // Si l'utilisateur a annulé l'invite UAC sur C:\Program Files, on déploie à la fois dans AppData\Local\CoopLink et dans la cible accessible
     let effective_dir = if fs::create_dir_all(target_dir).is_ok()
         && fs::write(target_dir.join(".write_test"), b"ok").is_ok()
     {
@@ -181,7 +195,6 @@ pub fn populate_complete_software_tree(
         fallback
     };
 
-    // Aussi peupler C:\Users\<User>\AppData\Local\CoopLink s'il existe déjà pour qu'aucun dossier CoopLink ne soit jamais vide !
     let local_dir = get_user_local_install_dir();
     let dirs_to_populate = if effective_dir != local_dir {
         vec![effective_dir.clone(), local_dir]
@@ -232,7 +245,7 @@ pub fn populate_complete_software_tree(
             "<Application xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n  <VisualElements BackgroundColor=\"#0066FF\" ShowNameOnSquare150x150Logo=\"on\" ForegroundText=\"light\" Square150x150Logo=\"resources\\CoopLink.png\" Square70x70Logo=\"resources\\CoopLink.png\"/>\n</Application>\n",
         );
 
-        // B. Dossier `bin\` (Services de Capture Premier Plan, Viewer & Moteurs Réseau/Audio)
+        // B. Dossier `bin\`
         if target_exe.exists() {
             let _ = fs::copy(&target_exe, bin_dir.join("cooplink-capture-service.exe"));
             let _ = fs::copy(&target_exe, bin_dir.join("cooplink-stream-viewer.exe"));
@@ -246,7 +259,7 @@ pub fn populate_complete_software_tree(
             b"MZ\x90\x00CoopLink WASAPI Per-Process Game Audio Anti-Echo Isolator v1.0.0",
         );
 
-        // C. Dossier `drivers\` (Pilotes Bus Manettes Virtuelles, Adaptateur d'Affichage Virtuel & Réseau Virtuel — JAMAIS VIDE)
+        // C. Dossier `drivers\` (Peuplé avec tous les pilotes — jamais vide)
         let _ = fs::write(
             drivers_dir.join("cooplink_gamepad_bus.inf"),
             "; CoopLink Virtual Multi-Gamepad Bus Driver (Player 1-4 XInput & DualShock 4)\n\
@@ -353,7 +366,6 @@ pub fn populate_complete_software_tree(
         );
     }
 
-    install_missing_drivers_silently(&effective_dir, install_gamepad_bus, install_virtual_display);
     effective_dir
 }
 
@@ -369,7 +381,7 @@ pub fn install_missing_drivers_silently(target_dir: &Path, install_gamepad_bus: 
              if (!(Test-Path $exe)) {{ \
                  try {{ \
                      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \
-                     Invoke-WebRequest -Uri 'https://github.com/nefarius/ViGEmBus/releases/latest/download/ViGEmBus_1.22.0_x64_x86_arm64.exe' -OutFile $exe -TimeoutSec 8 -ErrorAction SilentlyContinue; \
+                     Invoke-WebRequest -Uri 'https://github.com/nefarius/ViGEmBus/releases/latest/download/ViGEmBus_1.22.0_x64_x86_arm64.exe' -OutFile $exe -TimeoutSec 6 -ErrorAction SilentlyContinue; \
                      if (Test-Path $exe) {{ Start-Process -FilePath $exe -ArgumentList '/exenoui /qn /norestart' -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue }} \
                  }} catch {{}} \
              }}; \
@@ -391,22 +403,52 @@ pub fn install_missing_drivers_silently(target_dir: &Path, install_gamepad_bus: 
     }
 }
 
-/// Crée un raccourci Windows .lnk de façon totalement transparente
-pub fn create_windows_shortcut(target_exe: &Path, shortcut_path: &Path, description: &str) -> Result<()> {
-    let ps_script = format!(
-        "$WshShell = New-Object -ComObject WScript.Shell; \
-         $Shortcut = $WshShell.CreateShortcut('{0}'); \
-         $Shortcut.TargetPath = '{1}'; \
-         $Shortcut.Description = '{2}'; \
-         $Shortcut.WorkingDirectory = '{3}'; \
-         $Shortcut.Save()",
-        shortcut_path.to_string_lossy().replace('\'', "''"),
-        target_exe.to_string_lossy().replace('\'', "''"),
-        description.replace('\'', "''"),
-        target_exe.parent().unwrap_or(Path::new("")).to_string_lossy().replace('\'', "''")
-    );
+/// Crée les raccourcis Bureau (compatible OneDrive & Bureau local) et Menu Démarrer
+pub fn create_desktop_and_start_shortcuts(target_exe: &Path, create_desktop: bool, create_start: bool) -> Result<()> {
+    let exe_escaped = target_exe.to_string_lossy().replace('\'', "''");
+    let work_dir = target_exe
+        .parent()
+        .unwrap_or(Path::new(""))
+        .to_string_lossy()
+        .replace('\'', "''");
 
-    run_hidden_powershell(&ps_script)
+    let mut script = String::from("$WshShell = New-Object -ComObject WScript.Shell; ");
+
+    if create_desktop {
+        script.push_str(&format!(
+            "$deskPaths = @([Environment]::GetFolderPath('Desktop'), \"$env:USERPROFILE\\Desktop\"); \
+             foreach ($dp in ($deskPaths | Select-Object -Unique)) {{ \
+                 if ($dp -and (Test-Path $dp)) {{ \
+                     $lnk = Join-Path $dp 'CoopLink.lnk'; \
+                     $s = $WshShell.CreateShortcut($lnk); \
+                     $s.TargetPath = '{0}'; \
+                     $s.WorkingDirectory = '{1}'; \
+                     $s.IconLocation = '{0},0'; \
+                     $s.Description = 'CoopLink - Réseau P2P & Partage de Jeu Co-op'; \
+                     $s.Save(); \
+                 }} \
+             }}; ",
+            exe_escaped, work_dir
+        ));
+    }
+
+    if create_start {
+        script.push_str(&format!(
+            "$startDir = [Environment]::GetFolderPath('Programs'); \
+             if ($startDir -and (Test-Path $startDir)) {{ \
+                 $lnk = Join-Path $startDir 'CoopLink.lnk'; \
+                 $s = $WshShell.CreateShortcut($lnk); \
+                 $s.TargetPath = '{0}'; \
+                 $s.WorkingDirectory = '{1}'; \
+                 $s.IconLocation = '{0},0'; \
+                 $s.Description = 'CoopLink - Réseau P2P & Partage de Jeu Co-op'; \
+                 $s.Save(); \
+             }}; ",
+            exe_escaped, work_dir
+        ));
+    }
+
+    run_hidden_powershell(&script)
 }
 
 /// Enregistre les règles pare-feu Windows pour CoopLink de façon transparente
@@ -423,8 +465,12 @@ pub fn setup_silent_firewall(target_exe: &Path) -> Result<()> {
     run_hidden_powershell(&ps_script)
 }
 
-/// Enregistre CoopLink dans le Registre Windows pour la gestion des applications
+/// Enregistre CoopLink dans le Registre Windows (Applications installées) avec suppression complète de l'icône du Bureau et du Menu Démarrer lors de la désinstallation
 pub fn register_in_windows_uninstall(target_dir: &Path, target_exe: &Path) -> Result<()> {
+    let exe_escaped = target_exe.to_string_lossy().replace('\'', "''");
+    let dir_escaped = target_dir.to_string_lossy().replace('\'', "''");
+    let local_dir_escaped = get_user_local_install_dir().to_string_lossy().replace('\'', "''");
+
     let ps_script = format!(
         "$regPath = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CoopLink'; \
          if (!(Test-Path $regPath)) {{ New-Item -Path $regPath -Force | Out-Null }}; \
@@ -433,12 +479,57 @@ pub fn register_in_windows_uninstall(target_dir: &Path, target_exe: &Path) -> Re
          Set-ItemProperty -Path $regPath -Name 'Publisher' -Value 'Loic HUON'; \
          Set-ItemProperty -Path $regPath -Name 'DisplayIcon' -Value '{0}'; \
          Set-ItemProperty -Path $regPath -Name 'InstallLocation' -Value '{1}'; \
-         Set-ItemProperty -Path $regPath -Name 'UninstallString' -Value 'powershell -NoProfile -Command \"Remove-Item -Recurse -Force ''{1}''; Remove-Item -Path ''HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CoopLink'' -Force\"'",
-        target_exe.to_string_lossy().replace('\'', "''"),
-        target_dir.to_string_lossy().replace('\'', "''")
+         $uninsCmd = 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command \"' + \
+             'Stop-Process -Name cooplink,cooplink-capture-service,cooplink-stream-viewer -Force -ErrorAction SilentlyContinue; ' + \
+             '$shortcuts = @(' + \
+                 '(Join-Path ([Environment]::GetFolderPath(''Desktop'')) ''CoopLink.lnk''),' + \
+                 '(Join-Path ([Environment]::GetFolderPath(''CommonDesktopDirectory'')) ''CoopLink.lnk''),' + \
+                 '\"$env:USERPROFILE\\Desktop\\CoopLink.lnk\",' + \
+                 '\"$env:USERPROFILE\\OneDrive\\Desktop\\CoopLink.lnk\",' + \
+                 '\"$env:USERPROFILE\\OneDrive\\Bureau\\CoopLink.lnk\",' + \
+                 '(Join-Path ([Environment]::GetFolderPath(''Programs'')) ''CoopLink.lnk''),' + \
+                 '\"$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\CoopLink.lnk\"' + \
+             '); ' + \
+             'foreach ($s in $shortcuts) {{ if ($s -and (Test-Path $s)) {{ Remove-Item -LiteralPath $s -Force -ErrorAction SilentlyContinue }} }}; ' + \
+             'Remove-ItemProperty -Path ''HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'' -Name ''CoopLink'' -ErrorAction SilentlyContinue; ' + \
+             'Remove-Item -Path ''HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CoopLink'' -Recurse -Force -ErrorAction SilentlyContinue; ' + \
+             'Remove-Item -Path ''HKCU:\\Software\\CoopLink'' -Recurse -Force -ErrorAction SilentlyContinue; ' + \
+             'Remove-Item -LiteralPath ''{1}'' -Recurse -Force -ErrorAction SilentlyContinue; ' + \
+             'Remove-Item -LiteralPath ''{2}'' -Recurse -Force -ErrorAction SilentlyContinue\"'; \
+         Set-ItemProperty -Path $regPath -Name 'UninstallString' -Value $uninsCmd; \
+         Set-ItemProperty -Path $regPath -Name 'QuietUninstallString' -Value $uninsCmd",
+        exe_escaped, dir_escaped, local_dir_escaped
     );
 
     run_hidden_powershell(&ps_script)
+}
+
+/// Exécute la désinstallation complète de CoopLink (supprime l'icône du Bureau, le Menu Démarrer, les règles et les fichiers)
+pub fn perform_complete_uninstall() -> Result<()> {
+    let prog_dir = get_default_install_dir().to_string_lossy().replace('\'', "''");
+    let local_dir = get_user_local_install_dir().to_string_lossy().replace('\'', "''");
+
+    let ps = format!(
+        "Stop-Process -Name cooplink,cooplink-capture-service,cooplink-stream-viewer -Force -ErrorAction SilentlyContinue; \
+         $shortcuts = @( \
+             (Join-Path ([Environment]::GetFolderPath('Desktop')) 'CoopLink.lnk'), \
+             (Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'CoopLink.lnk'), \
+             \"$env:USERPROFILE\\Desktop\\CoopLink.lnk\", \
+             \"$env:USERPROFILE\\OneDrive\\Desktop\\CoopLink.lnk\", \
+             \"$env:USERPROFILE\\OneDrive\\Bureau\\CoopLink.lnk\", \
+             (Join-Path ([Environment]::GetFolderPath('Programs')) 'CoopLink.lnk'), \
+             \"$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\CoopLink.lnk\" \
+         ); \
+         foreach ($s in $shortcuts) {{ if ($s -and (Test-Path $s)) {{ Remove-Item -LiteralPath $s -Force -ErrorAction SilentlyContinue }} }}; \
+         Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'CoopLink' -ErrorAction SilentlyContinue; \
+         Remove-Item -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CoopLink' -Recurse -Force -ErrorAction SilentlyContinue; \
+         Remove-Item -Path 'HKCU:\\Software\\CoopLink' -Recurse -Force -ErrorAction SilentlyContinue; \
+         Start-Sleep -Milliseconds 300; \
+         Remove-Item -LiteralPath '{0}' -Recurse -Force -ErrorAction SilentlyContinue; \
+         Remove-Item -LiteralPath '{1}' -Recurse -Force -ErrorAction SilentlyContinue",
+        prog_dir, local_dir
+    );
+    run_hidden_powershell(&ps)
 }
 
 /// Lance le logiciel CoopLink installé
