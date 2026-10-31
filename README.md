@@ -5,12 +5,13 @@
 
 ---
 
-## 🎨 Charte Graphique & Identité Visuelle
+## 🎨 Charte Graphique & Identité Visuelle (Design 2026)
 
-CoopLink intègre une identité visuelle moderne inspirée de son logo officiel :
-- **Nuances dominantes** : Bleu électrique (`#0057FF`), Cyan vibrant (`#00D2FF`), Bleu nuit profond (`#0038A8`).
-- **Nuances secondaires** : Vert menthe (`#00BFA5`), Vert vif (`#00E599`), Indigo (`#651FFF`), Orange corail (`#FF6D00`).
-- **Fonds & Contrastes** : Dark Blue Space (`#090D16`), Blanc pur (`#FFFFFF`), Gris neutre (`#8E8E93`).
+CoopLink intègre une identité visuelle moderne 2026 inspirée de son logo officiel :
+- **Fonds & Contrastes** : Dark Carbon & Obsidian (`#0B0C0E`, `#111317`, `#171A21`) — zéro fond bleu criard, finition mate pure gamer.
+- **Nuances dominantes** : Cyan vibrant (`#00D2FF`), Bleu électrique (`#0057FF`), Bleu nuit profond (`#0038A8`).
+- **Nuances secondaires** : Vert vif (`#00E599`), Vert menthe (`#00BFA5`), Indigo (`#651FFF`), Orange corail (`#FF6D00`).
+- **Typographie** : Blanc pur (`#FFFFFF`), Blanc cassé (`#F0F4F8`), Gris neutre (`#95A1B2`).
 
 ---
 
@@ -60,11 +61,12 @@ CoopLink/
 Le serveur centralise la signalisation, l'attribution des identifiants uniques (`ClientID`), la traversée de NAT (UDP hole punching) et le relais de secours.
 
 ### Caractéristiques du Container :
-- **Port UDP `30024`** : Tunnel gaming, coordination et paquets de découverte.
-- **Port TCP `8080`** : Dashboard Web d'administration en direct.
-- **Utilisateur de sécurité** : Exécuté sous l'UID/GID **`568:568`** (non-root).
+- **Port Unique Exposé `30024`** :
+  - `30024/udp` : Tunnel gaming, attribution des `ClientID`, coordination et paquets de découverte.
+  - `30024/tcp` : Dashboard Web d'administration et monitoring en direct.
+- **Utilisateur de sécurité** : Exécuté sous l'UID/GID **`568:568`** (non-root sécurisé).
 - **Volume persistant à binder** : **`/data`** (stocke la configuration `server_config.json`, les données et l'historique).
-- **Build automatique GitHub Actions** : Déclenché à chaque push sur `main`, publie l'image sur GitHub Packages (`ghcr.io/hollow313/cooplink-server:latest`).
+- **Build automatique GitHub Actions** : Déclenché à chaque push sur `main`, compile sur Alpine Linux et publie l'image sur GitHub Packages (`ghcr.io/hollow313/cooplink-server:latest`).
 
 ### 🚀 Lancement avec Docker Compose
 
@@ -76,11 +78,12 @@ services:
     restart: unless-stopped
     user: "568:568"
     ports:
-      - "30024:30024/udp"   # Port de signalisation gaming
-      - "8080:8080/tcp"     # Dashboard Web d'administration
+      # Port unique 30024 exposé pour le tunnel UDP et le dashboard Web TCP
+      - "30024:30024/udp"
+      - "30024:30024/tcp"
     environment:
       - PORT_UDP=30024
-      - PORT_WEB=8080
+      - PORT_WEB=30024
       - DATA_DIR=/data
       - SERVER_NAME=CoopLink Official Master Hub
     volumes:
@@ -93,7 +96,7 @@ docker compose up -d
 ```
 
 ### 🌐 Dashboard Web d'Administration
-Ouvrez simplement votre navigateur sur `http://<IP-SERVEUR>:8080` :
+Ouvrez simplement votre navigateur sur `http://<IP-SERVEUR>:30024` :
 - Vue d'ensemble des **Salons Actifs** et du nombre de joueurs par salon.
 - Liste complète de **tous les Clients Connectés avec leur ClientID unique** (ex: `#1001`, `#1002`...), leur IP virtuelle, leur endpoint public et leur latence (Ping).
 - Statistiques de débit réseau (Mo relayés en direct).

@@ -1,5 +1,4 @@
 use crate::config::AppConfig;
-use crate::platform::windows::metric::get_network_interfaces;
 use crate::types::AppState;
 use crate::ui::retro_theme::RetroTheme;
 use egui::{Color32, RichText, Ui};
@@ -12,19 +11,20 @@ impl NetworkView {
         state: &mut AppState,
         config: &mut AppConfig,
         on_apply_metric_clicked: &mut bool,
+        on_refresh_interfaces_clicked: &mut bool,
     ) {
         ui.vertical(|ui| {
-            // Carte principale Métrique Réseau
+            // Carte principale Métrique Réseau (Dark Carbon 2026)
             egui::Frame::none()
                 .fill(RetroTheme::PANEL_BG)
-                .stroke(egui::Stroke::new(1.0_f32, RetroTheme::NEON_GREEN))
-                .inner_margin(12.0)
-                .rounding(4.0)
+                .stroke(egui::Stroke::new(1.0_f32, RetroTheme::GREEN_VIVID))
+                .inner_margin(14.0)
+                .rounding(7.0)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.heading(
                             RichText::new("⚡ OPTIMISATION DE LA MÉTRIQUE RÉSEAU (LAN OVERRIDE)")
-                                .color(RetroTheme::NEON_GREEN)
+                                .color(RetroTheme::GREEN_VIVID)
                                 .strong(),
                         );
                     });
@@ -48,26 +48,27 @@ impl NetworkView {
 
                         if config.target_metric <= 10 {
                             ui.label(
-                                RichText::new("★ PRIORITÉ ULTRA-ÉLEVÉE (RECOMMANDÉ)")
-                                    .color(RetroTheme::NEON_GREEN)
+                                RichText::new("🚀 PRIORITÉ ABSOLUE (RECOMMANDÉ)")
+                                    .color(RetroTheme::GREEN_VIVID)
                                     .strong(),
                             );
                         } else {
                             ui.label(
-                                RichText::new("ATTENTION: Métrique élevée, risque de conflit Wi-Fi")
-                                    .color(RetroTheme::RETRO_AMBER),
+                                RichText::new("⚠ Risque de passer après le Wi-Fi")
+                                    .color(RetroTheme::ORANGE_CORAL),
                             );
                         }
                     });
 
-                    ui.add_space(8.0);
+                    ui.add_space(10.0);
+
                     ui.horizontal(|ui| {
                         let btn = egui::Button::new(
-                            RichText::new("🔧 APPLIQUER LA MÉTRIQUE BASSE IMMÉDIATEMENT")
+                            RichText::new("APPLIQUER LA MÉTRIQUE PRIORITAIRE (5)")
                                 .color(Color32::BLACK)
                                 .strong(),
                         )
-                        .fill(RetroTheme::NEON_GREEN);
+                        .fill(RetroTheme::GREEN_VIVID);
 
                         if ui.add(btn).clicked() {
                             *on_apply_metric_clicked = true;
@@ -75,9 +76,14 @@ impl NetworkView {
 
                         if state.metric_applied {
                             ui.label(
-                                RichText::new("✔ Métrique appliquée avec succès !")
-                                    .color(RetroTheme::NEON_GREEN)
+                                RichText::new("✔ Priorité active : Vos paquets de jeu passent avant la box !")
+                                    .color(RetroTheme::GREEN_VIVID)
                                     .strong(),
+                            );
+                        } else {
+                            ui.label(
+                                RichText::new("Métrique en attente d'application")
+                                    .color(RetroTheme::TEXT_MUTED),
                             );
                         }
                     });
@@ -85,93 +91,111 @@ impl NetworkView {
 
             ui.add_space(15.0);
 
-            // Relais de broadcast des jeux vidéo
+            // Carte Relais Broadcast UDP
             egui::Frame::none()
                 .fill(RetroTheme::PANEL_BG)
-                .stroke(egui::Stroke::new(1.0_f32, RetroTheme::NEON_CYAN))
-                .inner_margin(12.0)
-                .rounding(4.0)
+                .stroke(egui::Stroke::new(1.0_f32, RetroTheme::CYAN_VIBRANT))
+                .inner_margin(14.0)
+                .rounding(7.0)
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.heading(
-                            RichText::new("📡 RÉPÉTEUR DE BROADCAST GAMING (UDP LAN)")
-                                .color(RetroTheme::NEON_CYAN)
-                                .strong(),
-                        );
-                    });
+                    ui.heading(
+                        RichText::new("📡 DÉCOUVERTE BROADCAST LAN (JEUX VIDÉO)")
+                            .color(RetroTheme::CYAN_VIBRANT)
+                            .strong(),
+                    );
                     ui.add_space(6.0);
 
                     ui.label(
                         RichText::new(
-                            "Intercepte et réplique en temps réel les trames de recherche de parties des moteurs \
-                             de jeux (Blizzard 6112, Valve Source 27015, Unreal Engine 7777, Minecraft, etc.).",
+                            "Le module Broadcast Relay écoute les diffusions UDP sur les ports gaming standards \
+                             (Source Engine, Warcraft III, Unreal, Minecraft, LAN DirectPlay...) et les injecte \
+                             instantanément dans le tunnel CoopLink pour que la partie apparaisse dans la liste locale.",
                         )
                         .color(RetroTheme::TEXT_MUTED),
                     );
 
                     ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        ui.checkbox(
-                            &mut config.enable_broadcast_reflector,
-                            RichText::new("Activer le relais de découverte LAN automatique").color(Color32::WHITE),
-                        );
-                    });
+
                     ui.label(
                         RichText::new(format!(
                             "Paquets de découverte relayés cette session: {}",
                             state.broadcast_packets_relayed
                         ))
-                        .color(RetroTheme::NEON_CYAN),
+                        .color(RetroTheme::CYAN_VIBRANT),
                     );
                 });
 
             ui.add_space(15.0);
 
-            // Liste des interfaces Windows détectées
+            // Liste des interfaces Windows détectées (Chargement 100% asynchrone sans gel UI)
             egui::Frame::none()
                 .fill(RetroTheme::PANEL_BG)
-                .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgb(40, 50, 75)))
-                .inner_margin(12.0)
-                .rounding(4.0)
+                .stroke(egui::Stroke::new(1.0_f32, RetroTheme::BORDER_SUBTLE))
+                .inner_margin(14.0)
+                .rounding(7.0)
                 .show(ui, |ui| {
-                    ui.heading(
-                        RichText::new("📋 INTERFACES RÉSEAU WINDOWS ACTIVES")
-                            .color(RetroTheme::TEXT_PRIMARY)
-                            .strong(),
-                    );
-                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.heading(
+                            RichText::new("📋 INTERFACES RÉSEAU WINDOWS ACTIVES")
+                                .color(RetroTheme::TEXT_PRIMARY)
+                                .strong(),
+                        );
 
-                    let ifaces = get_network_interfaces();
-                    if ifaces.is_empty() {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if state.is_refreshing_interfaces {
+                                ui.spinner();
+                                ui.label(RichText::new("Scan en cours...").color(RetroTheme::CYAN_VIBRANT).small());
+                            } else if ui.button("🔄 Actualiser les interfaces").clicked() {
+                                *on_refresh_interfaces_clicked = true;
+                            }
+                        });
+                    });
+                    ui.add_space(8.0);
+
+                    // Déclenchement automatique en arrière-plan au premier affichage si vide
+                    if state.cached_interfaces.is_empty() && !state.is_refreshing_interfaces {
+                        *on_refresh_interfaces_clicked = true;
+                    }
+
+                    if state.is_refreshing_interfaces && state.cached_interfaces.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(
+                                RichText::new("Analyse des cartes réseau Windows en tâche de fond...")
+                                    .color(RetroTheme::CYAN_VIBRANT)
+                                    .italics(),
+                            );
+                        });
+                    } else if state.cached_interfaces.is_empty() {
                         ui.label(
-                            RichText::new("Analyse des interfaces réseau en cours...")
+                            RichText::new("Aucune interface détectée pour le moment.")
                                 .color(RetroTheme::TEXT_MUTED)
                                 .italics(),
                         );
                     } else {
                         egui::Grid::new("interfaces_grid")
                             .num_columns(3)
-                            .spacing([25.0, 6.0])
+                            .spacing([25.0, 8.0])
                             .striped(true)
                             .show(ui, |ui| {
-                                ui.label(RichText::new("INTERFACE").color(RetroTheme::NEON_CYAN).strong());
-                                ui.label(RichText::new("MÉTRIQUE").color(RetroTheme::NEON_CYAN).strong());
-                                ui.label(RichText::new("PRIORITÉ").color(RetroTheme::NEON_CYAN).strong());
+                                ui.label(RichText::new("INTERFACE").color(RetroTheme::CYAN_VIBRANT).strong());
+                                ui.label(RichText::new("MÉTRIQUE").color(RetroTheme::CYAN_VIBRANT).strong());
+                                ui.label(RichText::new("PRIORITÉ").color(RetroTheme::CYAN_VIBRANT).strong());
                                 ui.end_row();
 
-                                for iface in ifaces {
+                                for iface in &state.cached_interfaces {
                                     let is_coop = iface.name.contains("CoopLink");
                                     let name_text = if is_coop {
-                                        RichText::new(&iface.name).color(RetroTheme::NEON_GREEN).strong()
+                                        RichText::new(&iface.name).color(RetroTheme::GREEN_VIVID).strong()
                                     } else {
-                                        RichText::new(&iface.name).color(Color32::WHITE)
+                                        RichText::new(&iface.name).color(RetroTheme::TEXT_PRIMARY)
                                     };
 
                                     ui.label(name_text);
                                     ui.label(
                                         RichText::new(format!("{}", iface.metric))
                                             .color(if iface.metric <= 10 {
-                                                RetroTheme::NEON_GREEN
+                                                RetroTheme::GREEN_VIVID
                                             } else {
                                                 RetroTheme::TEXT_MUTED
                                             })
@@ -179,11 +203,11 @@ impl NetworkView {
                                     );
 
                                     if iface.metric <= 10 {
-                                        ui.label(RichText::new("HAUTE (AVANT BOX)").color(RetroTheme::NEON_GREEN));
+                                        ui.label(RichText::new("HAUTE (AVANT BOX)").color(RetroTheme::GREEN_VIVID));
                                     } else if iface.metric <= 30 {
-                                        ui.label(RichText::new("NORMALE (ETHERNET)").color(RetroTheme::RETRO_AMBER));
+                                        ui.label(RichText::new("NORMALE (ETHERNET)").color(RetroTheme::ORANGE_CORAL));
                                     } else {
-                                        ui.label(RichText::new("BASSE (WI-FI/DEFAULT)").color(Color32::GRAY));
+                                        ui.label(RichText::new("BASSE (WI-FI/DEFAULT)").color(RetroTheme::TEXT_MUTED));
                                     }
                                     ui.end_row();
                                 }

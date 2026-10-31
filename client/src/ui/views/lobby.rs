@@ -47,33 +47,33 @@ impl LobbyView {
 fn render_status_banner(ui: &mut Ui, state: &AppState) {
     let (bg_color, status_text, dot_color, sub_text) = match state.status {
         ConnectionStatus::Hosting => (
-            Color32::from_rgb(12, 28, 22),
+            Color32::from_rgb(14, 24, 20),
             "SALON VIRTUEL EN LIGNE (HÔTE ACTIF)",
-            RetroTheme::NEON_GREEN,
+            RetroTheme::GREEN_VIVID,
             "En attente de vos amis. Vos jeux détecteront les parties comme en local.",
         ),
         ConnectionStatus::Connected => (
-            Color32::from_rgb(12, 25, 38),
+            Color32::from_rgb(17, 24, 28),
             "CONNECTÉ AU NŒUD VIRTUEL (CLIENT ACTIF)",
-            RetroTheme::NEON_CYAN,
+            RetroTheme::CYAN_VIBRANT,
             "Réseau LAN actif. Prêt à rejoindre la partie de votre hôte.",
         ),
         ConnectionStatus::Connecting => (
-            Color32::from_rgb(35, 28, 12),
+            Color32::from_rgb(26, 22, 14),
             "NÉGOCIATION RÉSEAU & UPNP EN COURS...",
-            RetroTheme::RETRO_AMBER,
+            RetroTheme::ORANGE_CORAL,
             "Initialisation du tunnel chiffré et ouverture des ports...",
         ),
         ConnectionStatus::Disconnected => (
-            Color32::from_rgb(18, 22, 34),
+            RetroTheme::CARD_BG,
             "HORS-LIGNE // PRÊT POUR LE GAMING",
-            Color32::from_rgb(140, 160, 190),
+            RetroTheme::TEXT_MUTED,
             "Créez une salle pour héberger vos amis, ou entrez l'adresse d'un hôte.",
         ),
         ConnectionStatus::Error => (
-            Color32::from_rgb(38, 14, 20),
+            Color32::from_rgb(28, 14, 16),
             "ERREUR DE CONNEXION RÉSEAU",
-            RetroTheme::RETRO_RED,
+            RetroTheme::RED_ERROR,
             "Vérifiez l'adresse IP et assurez-vous que l'hôte a bien démarré.",
         ),
     };
@@ -81,13 +81,13 @@ fn render_status_banner(ui: &mut Ui, state: &AppState) {
     egui::Frame::none()
         .fill(bg_color)
         .stroke(Stroke::new(1.0_f32, dot_color))
-        .inner_margin(10.0)
-        .rounding(Rounding::same(6.0))
+        .inner_margin(12.0)
+        .rounding(Rounding::same(7.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("●").color(dot_color).size(18.0));
                 ui.vertical(|ui| {
-                    ui.label(RichText::new(status_text).color(Color32::WHITE).strong());
+                    ui.label(RichText::new(status_text).color(RetroTheme::TEXT_PRIMARY).strong());
                     ui.label(RichText::new(sub_text).color(RetroTheme::TEXT_SECONDARY).small());
                 });
             });
@@ -104,9 +104,9 @@ fn render_connection_dashboard(
     // Ligne de configuration générale (Pseudo & Code)
     egui::Frame::none()
         .fill(RetroTheme::PANEL_BG)
-        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(35, 45, 70)))
+        .stroke(Stroke::new(1.0_f32, RetroTheme::BORDER_SUBTLE))
         .inner_margin(12.0)
-        .rounding(Rounding::same(6.0))
+        .rounding(Rounding::same(7.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("👤 PSEUDO JOUEUR:").color(RetroTheme::NEON_CYAN).strong());
@@ -263,25 +263,25 @@ fn render_active_session(
             if state.role == NodeRole::Host {
                 ui.add_space(10.0);
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(14, 22, 34))
-                    .stroke(Stroke::new(1.0_f32, RetroTheme::NEON_CYAN))
-                    .inner_margin(10.0)
-                    .rounding(Rounding::same(4.0))
+                    .fill(RetroTheme::CARD_BG)
+                    .stroke(Stroke::new(1.0_f32, RetroTheme::CYAN_VIBRANT))
+                    .inner_margin(12.0)
+                    .rounding(Rounding::same(7.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("🌐 ADRESSE À DONNER À VOS AMIS:").color(Color32::WHITE).strong());
+                            ui.label(RichText::new("🌐 ADRESSE À DONNER À VOS AMIS:").color(RetroTheme::TEXT_PRIMARY).strong());
                             if let Some(pub_ip) = state.public_ip {
                                 let full_addr = format!("{}:{}", pub_ip, config.listen_port);
-                                ui.label(RichText::new(&full_addr).color(RetroTheme::NEON_CYAN).strong().monospace());
+                                ui.label(RichText::new(&full_addr).color(RetroTheme::CYAN_VIBRANT).strong().monospace());
                                 if ui.button("📋 Copier Adresse").clicked() {
                                     ui.output_mut(|o| o.copied_text = full_addr);
                                 }
                             } else {
-                                ui.label(RichText::new("Recherche UPnP sur la box...").color(RetroTheme::RETRO_AMBER));
+                                ui.label(RichText::new("Recherche UPnP sur la box...").color(RetroTheme::ORANGE_CORAL));
                             }
 
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(RichText::new("✔ Port Box ouvert automatiquement via UPnP").color(RetroTheme::NEON_GREEN).small());
+                                ui.label(RichText::new("✔ Port Box ouvert automatiquement via UPnP").color(RetroTheme::GREEN_VIVID).small());
                             });
                         });
                     });
@@ -292,9 +292,9 @@ fn render_active_session(
 fn render_peers_scoreboard(ui: &mut Ui, state: &AppState) {
     egui::Frame::none()
         .fill(RetroTheme::PANEL_BG)
-        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(35, 45, 70)))
+        .stroke(Stroke::new(1.0_f32, RetroTheme::BORDER_SUBTLE))
         .inner_margin(14.0)
-        .rounding(Rounding::same(6.0))
+        .rounding(Rounding::same(7.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading(

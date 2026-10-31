@@ -8,15 +8,15 @@ impl ConsoleView {
     pub fn render(ui: &mut Ui, logs: &[LogEntry], on_clear_clicked: &mut bool) {
         ui.vertical(|ui| {
             egui::Frame::none()
-                .fill(Color32::from_rgb(6, 8, 14))
-                .stroke(egui::Stroke::new(1.0_f32, RetroTheme::NEON_GREEN))
-                .inner_margin(10.0)
-                .rounding(4.0)
+                .fill(RetroTheme::BG_DARK)
+                .stroke(egui::Stroke::new(1.0_f32, RetroTheme::GREEN_VIVID))
+                .inner_margin(12.0)
+                .rounding(7.0)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.heading(
                             RichText::new("📟 TERMINAL SYSTÈME & ÉVÉNEMENTS RÉSEAU")
-                                .color(RetroTheme::NEON_GREEN)
+                                .color(RetroTheme::GREEN_VIVID)
                                 .monospace()
                                 .strong(),
                         );
@@ -40,7 +40,7 @@ impl ConsoleView {
                             if logs.is_empty() {
                                 ui.label(
                                     RichText::new("[SYSTEM] Prêt. En attente d'événements réseau...")
-                                        .color(Color32::DARK_GRAY)
+                                        .color(RetroTheme::TEXT_MUTED)
                                         .monospace(),
                                 );
                             }
@@ -50,7 +50,7 @@ impl ConsoleView {
                                     // Timestamp
                                     ui.label(
                                         RichText::new(format!("[{}]", entry.timestamp))
-                                            .color(Color32::from_rgb(100, 115, 140))
+                                            .color(RetroTheme::TEXT_MUTED)
                                             .monospace(),
                                     );
 

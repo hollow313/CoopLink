@@ -8,13 +8,12 @@ services:
     restart: unless-stopped
     user: "568:568"
     ports:
-      # Port UDP gaming (coordination, attribution des IDs, traversée NAT et relais)
+      # Port unique 30024 exposé pour le tunnel UDP et l'admin Web TCP
       - "30024:30024/udp"
-      # Port Web (Interface d'administration et monitoring en direct)
-      - "8080:8080/tcp"
+      - "30024:30024/tcp"
     environment:
       - PORT_UDP=30024
-      - PORT_WEB=8080
+      - PORT_WEB=30024
       - DATA_DIR=/data
       - SERVER_NAME=CoopLink Official Hub #1
       - RUST_LOG=info

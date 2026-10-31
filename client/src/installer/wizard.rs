@@ -61,13 +61,13 @@ impl InstallerApp {
 
 impl eframe::App for InstallerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // En-tête de l'installateur style Arcade Gamer
+        // En-tête de l'installateur style Dark Carbon 2026
         egui::TopBottomPanel::top("installer_header")
             .frame(
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(12, 16, 26))
+                    .fill(Color32::from_rgb(17, 19, 23))
                     .inner_margin(14.0)
-                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(30, 44, 72))),
+                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(38, 43, 55))),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -80,7 +80,7 @@ impl eframe::App for InstallerApp {
                         ui.horizontal(|ui| {
                             ui.heading(
                                 RichText::new("COOPLINK")
-                                    .color(Color32::WHITE)
+                                    .color(Color32::from_rgb(240, 244, 248))
                                     .strong(),
                             );
                             ui.label(
@@ -92,7 +92,7 @@ impl eframe::App for InstallerApp {
                         });
                         ui.label(
                             RichText::new("Assistant d'installation officiel Windows 11 — Expérience 100% Graphique")
-                                .color(Color32::from_rgb(140, 165, 195))
+                                .color(Color32::from_rgb(149, 161, 178))
                                 .small(),
                         );
                     });
@@ -103,15 +103,15 @@ impl eframe::App for InstallerApp {
         egui::TopBottomPanel::bottom("installer_footer")
             .frame(
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(10, 13, 20))
+                    .fill(Color32::from_rgb(11, 12, 14))
                     .inner_margin(12.0)
-                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(25, 35, 55))),
+                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(38, 43, 55))),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("CoopLink v1.0.0 (c) 2026 Loic HUON")
-                            .color(Color32::from_rgb(90, 110, 140))
+                            .color(Color32::from_rgb(101, 113, 130))
                             .small(),
                     );
 
@@ -125,7 +125,7 @@ impl eframe::App for InstallerApp {
                                                 .color(Color32::BLACK)
                                                 .strong(),
                                         )
-                                        .fill(Color32::from_rgb(0, 230, 255)),
+                                        .fill(Color32::from_rgb(0, 210, 255)),
                                     )
                                     .clicked()
                                 {
@@ -143,9 +143,9 @@ impl eframe::App for InstallerApp {
                                         .strong(),
                                 )
                                 .fill(if self.license_accepted {
-                                    Color32::from_rgb(0, 230, 255)
+                                    Color32::from_rgb(0, 210, 255)
                                 } else {
-                                    Color32::from_rgb(28, 38, 56)
+                                    Color32::from_rgb(23, 26, 33)
                                 });
 
                                 if ui.add_enabled(self.license_accepted, next_btn).clicked() {
@@ -164,7 +164,7 @@ impl eframe::App for InstallerApp {
                                                 .color(Color32::BLACK)
                                                 .strong(),
                                         )
-                                        .fill(Color32::from_rgb(0, 230, 255)),
+                                        .fill(Color32::from_rgb(0, 210, 255)),
                                     )
                                     .clicked()
                                 {
@@ -181,7 +181,7 @@ impl eframe::App for InstallerApp {
                                         .color(Color32::BLACK)
                                         .strong(),
                                 )
-                                .fill(Color32::from_rgb(0, 255, 148));
+                                .fill(Color32::from_rgb(0, 229, 153));
 
                                 if ui.add(install_btn).clicked() {
                                     self.step = InstallStep::Installing;
@@ -195,7 +195,7 @@ impl eframe::App for InstallerApp {
                             InstallStep::Installing => {
                                 ui.label(
                                     RichText::new("Installation en arrière-plan...")
-                                        .color(Color32::from_rgb(255, 185, 20)),
+                                        .color(Color32::from_rgb(255, 109, 0)),
                                 );
                             }
                             InstallStep::Finished => {
@@ -206,7 +206,7 @@ impl eframe::App for InstallerApp {
                                                 .color(Color32::BLACK)
                                                 .strong(),
                                         )
-                                        .fill(Color32::from_rgb(0, 255, 148)),
+                                        .fill(Color32::from_rgb(0, 229, 153)),
                                     )
                                     .clicked()
                                 {
@@ -222,11 +222,11 @@ impl eframe::App for InstallerApp {
                 });
             });
 
-        // Contenu central de chaque étape
+        // Contenu central de chaque étape (Dark Carbon 2026)
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(16, 22, 35))
+                    .fill(Color32::from_rgb(11, 12, 14))
                     .inner_margin(20.0),
             )
             .show(ctx, |ui| match self.step {
@@ -264,18 +264,18 @@ impl InstallerApp {
                      pour jouer en coopération avec vos amis sur vos jeux vidéo favoris, exactement \
                      comme si vous étiez connectés sur la même box internet.",
                 )
-                .color(Color32::from_rgb(205, 220, 240)),
+                .color(Color32::from_rgb(240, 244, 248)),
             );
 
             ui.add_space(15.0);
 
             egui::Frame::none()
-                .fill(Color32::from_rgb(22, 30, 48))
-                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(45, 65, 100)))
+                .fill(Color32::from_rgb(23, 26, 33))
+                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(38, 43, 55)))
                 .inner_margin(14.0)
-                .rounding(Rounding::same(6.0))
+                .rounding(Rounding::same(7.0))
                 .show(ui, |ui| {
-                    ui.label(RichText::new("✨ Fonctionnalités incluses :").color(Color32::from_rgb(0, 230, 255)).strong());
+                    ui.label(RichText::new("✨ Fonctionnalités incluses :").color(Color32::from_rgb(0, 210, 255)).strong());
                     ui.add_space(6.0);
                     ui.label("✔ Ouverture de port automatique UPnP (aucune configuration de box nécessaire)");
                     ui.label("✔ Métrique réseau basse prioritaire (passe avant votre Wi-Fi pour les jeux)");
@@ -286,7 +286,7 @@ impl InstallerApp {
             ui.add_space(15.0);
             ui.label(
                 RichText::new("Cliquez sur 'Suivant' pour continuer l'installation.")
-                    .color(Color32::from_rgb(140, 165, 190)),
+                    .color(Color32::from_rgb(149, 161, 178)),
             );
         });
     }
@@ -295,12 +295,12 @@ impl InstallerApp {
         ui.vertical(|ui| {
             ui.heading(
                 RichText::new("📜 Contrat de Licence Logicielle")
-                    .color(Color32::WHITE)
+                    .color(Color32::from_rgb(240, 244, 248))
                     .strong(),
             );
             ui.label(
                 RichText::new("Veuillez lire attentivement le contrat de licence propriétaire avant de continuer.")
-                    .color(Color32::from_rgb(140, 165, 190)),
+                    .color(Color32::from_rgb(149, 161, 178)),
             );
             ui.add_space(10.0);
 
@@ -309,10 +309,10 @@ impl InstallerApp {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     egui::Frame::none()
-                        .fill(Color32::from_rgb(10, 14, 22))
-                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(35, 48, 76)))
+                        .fill(Color32::from_rgb(14, 16, 20))
+                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(38, 43, 55)))
                         .inner_margin(12.0)
-                        .rounding(Rounding::same(4.0))
+                        .rounding(Rounding::same(6.0))
                         .show(ui, |ui| {
                             ui.label(
                                 RichText::new(
@@ -329,7 +329,7 @@ impl InstallerApp {
                                      No open source license is granted.",
                                 )
                                 .monospace()
-                                .color(Color32::from_rgb(180, 205, 230))
+                                .color(Color32::from_rgb(200, 210, 225))
                                 .small(),
                             );
                         });
@@ -339,7 +339,7 @@ impl InstallerApp {
             ui.checkbox(
                 &mut self.license_accepted,
                 RichText::new("J'ai lu et j'accepte les termes du contrat de licence")
-                    .color(Color32::from_rgb(0, 255, 148))
+                    .color(Color32::from_rgb(0, 229, 153))
                     .strong(),
             );
         });
@@ -349,25 +349,26 @@ impl InstallerApp {
         ui.vertical(|ui| {
             ui.heading(
                 RichText::new("📁 Dossier de destination")
-                    .color(Color32::WHITE)
+                    .color(Color32::from_rgb(240, 244, 248))
                     .strong(),
             );
             ui.label(
                 RichText::new("Choisissez l'emplacement sur votre disque où CoopLink sera installé :")
-                    .color(Color32::from_rgb(140, 165, 190)),
+                    .color(Color32::from_rgb(149, 161, 178)),
             );
             ui.add_space(15.0);
 
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Dossier :").color(Color32::WHITE).strong());
+                ui.label(RichText::new("Dossier :").color(Color32::from_rgb(240, 244, 248)).strong());
                 ui.add(egui::TextEdit::singleline(&mut self.install_dir).desired_width(400.0));
             });
 
             ui.add_space(15.0);
             egui::Frame::none()
-                .fill(Color32::from_rgb(22, 30, 48))
+                .fill(Color32::from_rgb(23, 26, 33))
+                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(38, 43, 55)))
                 .inner_margin(12.0)
-                .rounding(Rounding::same(4.0))
+                .rounding(Rounding::same(6.0))
                 .show(ui, |ui| {
                     ui.label("Espace disque requis : ~15 Mo");
                     ui.label("Espace disque disponible : Plus de 10 Go");
@@ -379,38 +380,38 @@ impl InstallerApp {
         ui.vertical(|ui| {
             ui.heading(
                 RichText::new("⚙ Options d'installation et de raccourcis")
-                    .color(Color32::WHITE)
+                    .color(Color32::from_rgb(240, 244, 248))
                     .strong(),
             );
             ui.label(
                 RichText::new("Sélectionnez les tâches à exécuter lors de l'installation :")
-                    .color(Color32::from_rgb(140, 165, 190)),
+                    .color(Color32::from_rgb(149, 161, 178)),
             );
             ui.add_space(15.0);
 
             ui.checkbox(
                 &mut self.create_desktop_shortcut,
-                RichText::new("Créer une icône sur le Bureau Windows").color(Color32::WHITE),
+                RichText::new("Créer une icône sur le Bureau Windows").color(Color32::from_rgb(240, 244, 248)),
             );
             ui.add_space(8.0);
 
             ui.checkbox(
                 &mut self.create_start_menu_shortcut,
-                RichText::new("Créer un raccourci dans le Menu Démarrer").color(Color32::WHITE),
+                RichText::new("Créer un raccourci dans le Menu Démarrer").color(Color32::from_rgb(240, 244, 248)),
             );
             ui.add_space(8.0);
 
             ui.checkbox(
                 &mut self.configure_firewall,
                 RichText::new("Autoriser automatiquement CoopLink dans le Pare-feu Windows Defender")
-                    .color(Color32::from_rgb(0, 255, 148))
+                    .color(Color32::from_rgb(0, 229, 153))
                     .strong(),
             );
 
             ui.add_space(15.0);
             ui.label(
                 RichText::new("Tout est prêt ! Cliquez sur 'Installer maintenant' pour lancer la procédure.")
-                    .color(Color32::from_rgb(140, 165, 190)),
+                    .color(Color32::from_rgb(149, 161, 178)),
             );
         });
     }
@@ -420,7 +421,7 @@ impl InstallerApp {
             ui.add_space(35.0);
             ui.heading(
                 RichText::new("📦 Installation de CoopLink en cours...")
-                    .color(Color32::WHITE)
+                    .color(Color32::from_rgb(240, 244, 248))
                     .strong(),
             );
             ui.add_space(20.0);
@@ -428,20 +429,20 @@ impl InstallerApp {
             let progress_bar = egui::ProgressBar::new(self.progress)
                 .show_percentage()
                 .animate(true)
-                .fill(Color32::from_rgb(0, 255, 148));
+                .fill(Color32::from_rgb(0, 229, 153));
 
             ui.add_sized([ui.available_width() - 40.0, 26.0], progress_bar);
 
             ui.add_space(15.0);
             ui.label(
                 RichText::new(&self.status_label)
-                    .color(Color32::from_rgb(0, 230, 255))
+                    .color(Color32::from_rgb(0, 210, 255))
                     .monospace(),
             );
 
             if let Some(ref err) = self.error_msg {
                 ui.add_space(10.0);
-                ui.label(RichText::new(format!("Erreur: {}", err)).color(Color32::RED));
+                ui.label(RichText::new(format!("Erreur: {}", err)).color(Color32::from_rgb(255, 68, 68)));
             }
         });
     }
@@ -451,7 +452,7 @@ impl InstallerApp {
             ui.add_space(15.0);
             ui.heading(
                 RichText::new("🎉 Installation de CoopLink terminée avec succès !")
-                    .color(Color32::from_rgb(0, 255, 148))
+                    .color(Color32::from_rgb(0, 229, 153))
                     .strong(),
             );
             ui.add_space(15.0);
@@ -461,21 +462,21 @@ impl InstallerApp {
                     "Le moteur de réseau local virtuel CoopLink est maintenant installé et configuré \
                      sur votre système. Vos amis peuvent dès maintenant vous rejoindre pour jouer en LAN.",
                 )
-                .color(Color32::WHITE),
+                .color(Color32::from_rgb(240, 244, 248)),
             );
 
             ui.add_space(20.0);
             ui.checkbox(
                 &mut self.launch_on_finish,
                 RichText::new("Lancer CoopLink immédiatement")
-                    .color(Color32::from_rgb(0, 230, 255))
+                    .color(Color32::from_rgb(0, 210, 255))
                     .strong(),
             );
 
             ui.add_space(15.0);
             ui.label(
                 RichText::new("Cliquez sur 'Terminer' pour fermer l'assistant.")
-                    .color(Color32::from_rgb(140, 165, 190)),
+                    .color(Color32::from_rgb(149, 161, 178)),
             );
         });
     }
@@ -566,8 +567,10 @@ impl InstallerApp {
 fn setup_installer_theme(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
     let mut visuals = egui::Visuals::dark();
-    visuals.panel_fill = Color32::from_rgb(14, 18, 28);
-    visuals.window_fill = Color32::from_rgb(18, 24, 38);
+    visuals.panel_fill = Color32::from_rgb(11, 12, 14); // #0B0C0E Dark Carbon
+    visuals.window_fill = Color32::from_rgb(17, 19, 23); // #111317
+    visuals.faint_bg_color = Color32::from_rgb(23, 26, 33); // #171A21
+    visuals.extreme_bg_color = Color32::from_rgb(8, 9, 11);
     style.visuals = visuals;
     ctx.set_style(style);
 }

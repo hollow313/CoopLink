@@ -1,68 +1,54 @@
 # ------------------------------------------------------------------------------
-# CoopLink Server - Multi-stage Production Dockerfile
-# User: 568 (Non-root security standard)
-# Ports: 30024/udp (Gaming Tunnel), 8080/tcp (Web Dashboard)
+# CoopLink Server - Production Dockerfile (Alpine Linux)
+# User: 568 (Non-root security)
+# Unified Port: 30024 (30024/udp Gaming Tunnel, 30024/tcp Web Admin Dashboard)
 # ------------------------------------------------------------------------------
 
-# --- Étape 1 : Build du binaire Rust ---
-FROM rust:1.88-bullseye AS builder
+# --- Étape 1 : Build du binaire Rust statique ---
+FROM rust:1.80-alpine AS builder
+
+RUN apk add --no-cache musl-dev gcc make
 
 WORKDIR /build
 
-# Copie des manifestes pour mise en cache des dépendances
-COPY Cargo.toml ./Cargo.toml
-COPY server/Cargo.toml ./server/Cargo.toml
-COPY client/Cargo.toml ./client/Cargo.toml
+# Copie autonome du manifeste serveur
+COPY server/Cargo.toml ./Cargo.toml
 
-# Création de stubs temporaires pour compiler les dépendances
-RUN mkdir -p server/src client/src && \
-    echo "fn main() {}" > server/src/main.rs && \
-    echo "fn main() {}" > client/src/main.rs && \
-    cargo check --bin cooplink-server --release || true
+# Création d'un stub pour la mise en cache des dépendances
+RUN mkdir -p src && \
+    echo "fn main() {}" > src/main.rs && \
+    cargo check --release || true
 
-# Copie du code source complet
-COPY server ./server
+# Copie du code source complet du serveur
+COPY server/src ./src
 
-# Compilation du binaire release optimisé
-RUN cargo build --bin cooplink-server --release
+# Compilation optimisée du serveur
+RUN cargo build --release
 
-# --- Étape 2 : Image Runtime légère & sécurisée ---
-FROM debian:bullseye-slim
+# --- Étape 2 : Image Runtime minimale & sécurisée ---
+FROM alpine:3.20
 
-# Installation des certificats CA
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
-
-# Création du groupe et de l'utilisateur non-root 568 demandé
-RUN groupadd -g 568 cooplink && \
-    useradd -u 568 -g cooplink -m -s /bin/sh cooplink
-
-# Création et attribution des droits sur le répertoire persistant /data
-RUN mkdir -p /data && chown -R 568:568 /data
+RUN apk add --no-cache ca-certificates tzdata shadow && \
+    addgroup -g 568 -S cooplink && \
+    adduser -u 568 -S cooplink -G cooplink -s /bin/sh -D && \
+    mkdir -p /data && chown -R 568:568 /data
 
 WORKDIR /home/cooplink
 
-# Copie du binaire compilé depuis l'étape précédente
 COPY --from=builder --chown=568:568 /build/target/release/cooplink-server /usr/local/bin/cooplink-server
 
-# Définition de l'utilisateur 568
 USER 568:568
 
-# Variables d'environnement par défaut
 ENV PORT_UDP=30024 \
-    PORT_WEB=8080 \
+    PORT_WEB=30024 \
     DATA_DIR=/data \
     SERVER_NAME="CoopLink Master Hub" \
     RUST_LOG=info
 
-# Exposition des ports
-# 30024/udp : Signalisation, coordination et tunnel UDP
-# 8080/tcp  : Interface Web d'administration et métriques
+# Le container s'expose UNIQUEMENT sur le port 30024 (UDP pour le tunnel, TCP pour le dashboard Web)
 EXPOSE 30024/udp
-EXPOSE 8080/tcp
+EXPOSE 30024/tcp
 
-# Volume de persistance bindable
 VOLUME ["/data"]
 
-# Commande d'entrée
 ENTRYPOINT ["/usr/local/bin/cooplink-server"]

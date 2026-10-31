@@ -8,11 +8,11 @@ use crate::network::broadcast_relay::BroadcastRelay;
 use crate::network::tunnel::NetworkTunnel;
 use crate::network::upnp::{UpnpManager, UpnpState};
 use crate::platform::windows::firewall::{check_firewall_status, setup_firewall_rules};
-use crate::platform::windows::metric::{is_metric_priority_active, set_adapter_metric};
+use crate::platform::windows::metric::set_adapter_metric;
 use crate::types::{AppState, ConnectionStatus, LogEntry, LogLevel, NodeRole};
 use chrono::Local;
 use eframe::egui;
-use egui::{Color32, RichText, TextureHandle};
+use egui::{RichText, TextureHandle};
 use logo::load_embedded_logo;
 use parking_lot::Mutex;
 use retro_theme::RetroTheme;
@@ -52,6 +52,7 @@ pub struct CoopLinkApp {
     pub to_tunnel_bcast_tx: mpsc::Sender<(u16, Vec<u8>)>,
     pub from_tunnel_bcast_rx: Option<mpsc::Receiver<(u16, Vec<u8>)>>,
     pub logo_texture: Option<TextureHandle>,
+    pub interfaces_rx: Option<crossbeam_channel::Receiver<Vec<crate::platform::windows::metric::InterfaceMetricInfo>>>,
 }
 
 impl CoopLinkApp {
@@ -70,7 +71,6 @@ impl CoopLinkApp {
 
         // Diagnostic pare-feu initial
         state.firewall_ok = check_firewall_status();
-        state.metric_applied = is_metric_priority_active(&state.adapter_name, config.target_metric);
 
         let logo_texture = load_embedded_logo(&cc.egui_ctx);
 
@@ -91,7 +91,11 @@ impl CoopLinkApp {
             to_tunnel_bcast_tx,
             from_tunnel_bcast_rx: Some(from_tunnel_bcast_rx),
             logo_texture,
+            interfaces_rx: None,
         };
+
+        // Scan asynchrone des interfaces en tâche de fond (0ms de blocage au démarrage)
+        app.trigger_refresh_interfaces();
 
         app.add_log(LogLevel::Success, "CoopLink initialisé avec succès ! Prêt pour le gaming LAN.");
 
@@ -130,6 +134,15 @@ impl CoopLinkApp {
 
 impl eframe::App for CoopLinkApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Réception asynchrone des interfaces réseau (évite tout lag/gel lors du changement d'onglet)
+        if let Some(ref rx) = self.interfaces_rx {
+            if let Ok(ifaces) = rx.try_recv() {
+                self.state.cached_interfaces = ifaces;
+                self.state.is_refreshing_interfaces = false;
+                self.interfaces_rx = None;
+            }
+        }
+
         // Rafraîchissement des statistiques en temps réel
         self.state.total_bytes_tx = self.tunnel.bytes_tx.load(std::sync::atomic::Ordering::Relaxed);
         self.state.total_bytes_rx = self.tunnel.bytes_rx.load(std::sync::atomic::Ordering::Relaxed);
@@ -156,13 +169,13 @@ impl eframe::App for CoopLinkApp {
             }
         }
 
-        // En-tête arcade rétro
+        // En-tête moderne 2026
         egui::TopBottomPanel::top("top_panel")
             .frame(
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(14, 16, 26))
-                    .inner_margin(10.0)
-                    .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgb(30, 40, 65))),
+                    .fill(RetroTheme::PANEL_BG)
+                    .inner_margin(12.0)
+                    .stroke(egui::Stroke::new(1.0_f32, RetroTheme::BORDER_SUBTLE)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -186,11 +199,11 @@ impl eframe::App for CoopLinkApp {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let (dot_color, status_label) = match self.state.status {
-                            ConnectionStatus::Hosting => (RetroTheme::NEON_GREEN, "HOSTING ONLINE"),
-                            ConnectionStatus::Connected => (RetroTheme::NEON_CYAN, "LAN ACTIVE"),
-                            ConnectionStatus::Connecting => (RetroTheme::RETRO_AMBER, "CONNECTING..."),
-                            ConnectionStatus::Disconnected => (Color32::DARK_GRAY, "OFFLINE"),
-                            ConnectionStatus::Error => (RetroTheme::RETRO_RED, "NET ERROR"),
+                            ConnectionStatus::Hosting => (RetroTheme::GREEN_VIVID, "HÔTE ACTIF"),
+                            ConnectionStatus::Connected => (RetroTheme::CYAN_VIBRANT, "RÉSEAU ACTIF"),
+                            ConnectionStatus::Connecting => (RetroTheme::ORANGE_CORAL, "CONNEXION..."),
+                            ConnectionStatus::Disconnected => (RetroTheme::TEXT_MUTED, "HORS-LIGNE"),
+                            ConnectionStatus::Error => (RetroTheme::RED_ERROR, "ERREUR RÉSEAU"),
                         };
 
                         ui.label(RichText::new(status_label).color(dot_color).monospace().strong());
@@ -200,23 +213,23 @@ impl eframe::App for CoopLinkApp {
 
                 ui.add_space(8.0);
 
-                // Barre d'onglets rétro
+                // Barre d'onglets moderne
                 ui.horizontal(|ui| {
-                    tab_button(ui, &mut self.active_tab, ActiveTab::Lobby, "🕹 LOBBY SALON");
-                    tab_button(ui, &mut self.active_tab, ActiveTab::Network, "⚡ RÉSEAU & MÉTRIQUE");
-                    tab_button(ui, &mut self.active_tab, ActiveTab::Firewall, "🛡 PARE-FEU");
-                    tab_button(ui, &mut self.active_tab, ActiveTab::Settings, "⚙ PARAMÈTRES");
-                    tab_button(ui, &mut self.active_tab, ActiveTab::Console, "📟 TERMINAL");
+                    tab_button(ui, &mut self.active_tab, ActiveTab::Lobby, "🕹 Lobby Salon");
+                    tab_button(ui, &mut self.active_tab, ActiveTab::Network, "⚡ Réseau & Métrique");
+                    tab_button(ui, &mut self.active_tab, ActiveTab::Firewall, "🛡 Pare-feu");
+                    tab_button(ui, &mut self.active_tab, ActiveTab::Settings, "⚙ Paramètres");
+                    tab_button(ui, &mut self.active_tab, ActiveTab::Console, "📟 Journal Système");
                 });
             });
 
-        // Pied de page rétro
+        // Pied de page moderne
         egui::TopBottomPanel::bottom("bottom_panel")
             .frame(
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(10, 12, 20))
-                    .inner_margin(6.0)
-                    .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgb(25, 30, 50))),
+                    .fill(RetroTheme::BG_DARK)
+                    .inner_margin(8.0)
+                    .stroke(egui::Stroke::new(1.0_f32, RetroTheme::BORDER_SUBTLE)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -242,7 +255,7 @@ impl eframe::App for CoopLinkApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             RichText::new("COOPLINK v1.0.0 PROPRIETARY // WIN11")
-                                .color(Color32::from_rgb(80, 95, 120))
+                                .color(RetroTheme::TEXT_MUTED)
                                 .monospace()
                                 .small(),
                         );
@@ -256,6 +269,7 @@ impl eframe::App for CoopLinkApp {
             let mut on_join_clicked = false;
             let mut on_disconnect_clicked = false;
             let mut on_apply_metric_clicked = false;
+            let mut on_refresh_interfaces_clicked = false;
             let mut on_repair_firewall_clicked = false;
             let mut on_clear_console_clicked = false;
 
@@ -277,6 +291,7 @@ impl eframe::App for CoopLinkApp {
                         &mut self.state,
                         &mut self.config,
                         &mut on_apply_metric_clicked,
+                        &mut on_refresh_interfaces_clicked,
                     );
                 }
                 ActiveTab::Firewall => {
@@ -310,6 +325,10 @@ impl eframe::App for CoopLinkApp {
 
             if on_apply_metric_clicked {
                 self.apply_low_metric();
+            }
+
+            if on_refresh_interfaces_clicked {
+                self.trigger_refresh_interfaces();
             }
 
             if on_repair_firewall_clicked {
@@ -472,6 +491,19 @@ impl CoopLinkApp {
         );
     }
 
+    pub fn trigger_refresh_interfaces(&mut self) {
+        if self.state.is_refreshing_interfaces {
+            return;
+        }
+        self.state.is_refreshing_interfaces = true;
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        self.interfaces_rx = Some(rx);
+        std::thread::spawn(move || {
+            let list = crate::platform::windows::metric::get_network_interfaces();
+            let _ = tx.send(list);
+        });
+    }
+
     fn repair_firewall(&mut self) {
         let port = self.config.listen_port;
         let subnet = format!("{}.0/24", self.config.virtual_subnet_prefix);
@@ -490,16 +522,23 @@ impl CoopLinkApp {
 fn tab_button(ui: &mut egui::Ui, current: &mut ActiveTab, tab: ActiveTab, label: &str) {
     let is_selected = *current == tab;
     let text = if is_selected {
-        RichText::new(label).color(Color32::BLACK).strong()
+        RichText::new(label).color(RetroTheme::ICON_WHITE).strong()
     } else {
-        RichText::new(label).color(RetroTheme::TEXT_PRIMARY)
+        RichText::new(label).color(RetroTheme::TEXT_SECONDARY)
     };
 
-    let btn = egui::Button::new(text).fill(if is_selected {
-        RetroTheme::NEON_CYAN
-    } else {
-        Color32::from_rgb(22, 28, 44)
-    });
+    let btn = egui::Button::new(text)
+        .fill(if is_selected {
+            RetroTheme::CARD_BG_HOVER
+        } else {
+            RetroTheme::PANEL_BG
+        })
+        .stroke(if is_selected {
+            egui::Stroke::new(1.5_f32, RetroTheme::CYAN_VIBRANT)
+        } else {
+            egui::Stroke::new(1.0_f32, RetroTheme::BORDER_SUBTLE)
+        })
+        .rounding(egui::Rounding::same(7.0));
 
     if ui.add(btn).clicked() {
         *current = tab;

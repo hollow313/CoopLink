@@ -70,6 +70,8 @@ pub struct AppState {
     pub upnp_enabled: bool,
     pub upnp_status_text: String,
     pub public_ip: Option<Ipv4Addr>,
+    pub cached_interfaces: Vec<crate::platform::windows::metric::InterfaceMetricInfo>,
+    pub is_refreshing_interfaces: bool,
 }
 
 impl Default for AppState {
@@ -91,6 +93,8 @@ impl Default for AppState {
             upnp_enabled: true,
             upnp_status_text: "En attente".to_string(),
             public_ip: None,
+            cached_interfaces: Vec::new(),
+            is_refreshing_interfaces: false,
         }
     }
 }

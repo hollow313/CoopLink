@@ -113,6 +113,7 @@ pub fn get_network_interfaces() -> Vec<InterfaceMetricInfo> {
 }
 
 /// Vérifie si l'interface spécifiée a actuellement une métrique prioritaire (<= 10)
+#[allow(dead_code)]
 pub fn is_metric_priority_active(adapter_name: &str, target_metric: u32) -> bool {
     let ifaces = get_network_interfaces();
     for iface in ifaces {

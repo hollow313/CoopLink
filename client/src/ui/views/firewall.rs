@@ -87,9 +87,9 @@ impl FirewallView {
             // Détails des règles appliquées
             egui::Frame::none()
                 .fill(RetroTheme::PANEL_BG)
-                .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgb(40, 50, 75)))
-                .inner_margin(12.0)
-                .rounding(4.0)
+                .stroke(egui::Stroke::new(1.0_f32, RetroTheme::BORDER_SUBTLE))
+                .inner_margin(14.0)
+                .rounding(7.0)
                 .show(ui, |ui| {
                     ui.heading(
                         RichText::new("📝 DÉTAIL DES EXCEPTIONS PARE-FEU DE JEU")
