@@ -77,6 +77,11 @@ impl SettingsView {
 
                     // Options automatiques
                     ui.checkbox(
+                        &mut config.enable_upnp,
+                        RichText::new("Activer l'ouverture automatique de port UPnP sur la Box internet (Recommandé)")
+                            .color(RetroTheme::NEON_GREEN),
+                    );
+                    ui.checkbox(
                         &mut config.auto_metric_optimization,
                         RichText::new("Appliquer automatiquement la métrique basse au démarrage")
                             .color(Color32::WHITE),

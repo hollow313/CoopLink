@@ -16,7 +16,14 @@ Que ce soit pour les jeux rétro des années 90/2000 (Warcraft III, Age of Empir
 
 ## 🚀 Fonctionnalités Clés
 
-### 1. ⚡ Métrique Réseau Basse Prioritaire (Wi-Fi & Box Override)
+### 1. 🌐 Ouverture Automatique de Port UPnP (Zéro Configuration Box)
+Pour l'Hôte de la partie, **plus besoin d'ouvrir manuellement sa box internet** :
+- CoopLink détecte la passerelle UPnP IGD de la box (Livebox, Freebox, Bbox, SFR Box, routeurs ASUS/TP-Link).
+- Dès que vous créez une salle, le port UDP `42422` est ouvert automatiquement sur la box.
+- Votre adresse IP publique est automatiquement détectée et affichée dans le Lobby avec un bouton de copie en un clic.
+- Lorsque vous quittez la salle ou fermez CoopLink, le port est refermé proprement.
+
+### 2. ⚡ Métrique Réseau Basse Prioritaire (Wi-Fi & Box Override)
 Dans Windows, chaque carte réseau possède une **Métrique d'Interface** qui définit sa priorité dans la table de routage :
 - Le Wi-Fi a généralement une métrique de **35 à 50+**.
 - L'Ethernet filaire a généralement une métrique de **25**.
@@ -71,9 +78,20 @@ Le code est structuré autour du trait modulaire `VirtualAdapter` :
 
 ---
 
-## 📦 Installation & Prérequis
+## 📦 Installation & Mire d'Installation Professionnelle
 
-### Prérequis Système
+Pour une expérience utilisateur commerciale et soignée, **aucune fenêtre de commande noire (CMD) n'est affichée**. CoopLink propose deux modes d'installation :
+
+### 1. Mire d'installation graphique native (`cooplink-setup.exe`)
+Lancez simplement `cooplink-setup.exe` :
+- Assistant graphique pas-à-pas (Bienvenue, Contrat de Licence, Choix du répertoire).
+- Options de création des raccourcis (Bureau et Menu Démarrer).
+- Configuration automatique et transparente du Pare-feu Windows Defender sans invite de commande.
+- Enregistrement propre dans le système Windows 11 pour la désinstallation.
+- Case à cocher pour lancer le logiciel immédiatement à la fin.
+
+### 2. Script Inno Setup (`installer/CoopLink_Setup.iss`)
+Un script Inno Setup standard de l'industrie est également fourni pour packager un installeur Windows officiel autonome compressé en LZMA2.
 - **Système d'exploitation** : Windows 11 (ou Windows 10 version 2004+) 64-bit.
 - **Droits Administrateur** : Recommandés pour l'application automatique de la métrique basse et des règles pare-feu Windows.
 - **Compilateur Rust** (si compilation depuis les sources) : Rust 1.80+ avec Cargo.

@@ -127,6 +127,36 @@ impl LobbyView {
                                     }
                                 });
                             });
+
+                            // Encart UPnP & IP Publique pour l'Hôte
+                            if state.role == NodeRole::Host {
+                                ui.add_space(8.0);
+                                egui::Frame::none()
+                                    .fill(Color32::from_rgb(12, 18, 30))
+                                    .stroke(egui::Stroke::new(1.0_f32, RetroTheme::NEON_GREEN))
+                                    .inner_margin(8.0)
+                                    .rounding(4.0)
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(RichText::new("🌐 MON IP PUBLIQUE (À ENVOYER AUX AMIS):").color(RetroTheme::TEXT_PRIMARY).strong());
+                                            if let Some(pub_ip) = state.public_ip {
+                                                let full_addr = format!("{}:{}", pub_ip, config.listen_port);
+                                                ui.label(RichText::new(&full_addr).color(RetroTheme::NEON_GREEN).strong().monospace());
+                                                if ui.button("📋 Copier Adresse Hôte").clicked() {
+                                                    ui.output_mut(|o| o.copied_text = full_addr);
+                                                }
+                                            } else {
+                                                ui.label(RichText::new("Détection automatique en cours...").color(RetroTheme::RETRO_AMBER));
+                                            }
+                                        });
+
+                                        ui.horizontal(|ui| {
+                                            ui.label(RichText::new("BOX INTERNET (UPNP):").color(RetroTheme::TEXT_MUTED).small());
+                                            ui.label(RichText::new(&state.upnp_status_text).color(RetroTheme::NEON_CYAN).small());
+                                            ui.label(RichText::new("✔ Zéro configuration manuelle de box requise").color(RetroTheme::NEON_GREEN).small());
+                                        });
+                                    });
+                            }
                         }
                     }
                 });

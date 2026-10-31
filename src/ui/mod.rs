@@ -5,12 +5,14 @@ use crate::adapter::windows::WindowsVirtualAdapter;
 use crate::config::AppConfig;
 use crate::network::broadcast_relay::BroadcastRelay;
 use crate::network::tunnel::NetworkTunnel;
+use crate::network::upnp::{UpnpManager, UpnpState};
 use crate::platform::windows::firewall::{check_firewall_status, setup_firewall_rules};
 use crate::platform::windows::metric::{is_metric_priority_active, set_adapter_metric};
 use crate::types::{AppState, ConnectionStatus, LogEntry, LogLevel, NodeRole};
 use chrono::Local;
 use eframe::egui;
 use egui::{Color32, RichText};
+use parking_lot::Mutex;
 use retro_theme::RetroTheme;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -40,6 +42,7 @@ pub struct CoopLinkApp {
     pub rt: Arc<Runtime>,
     pub tunnel: Arc<NetworkTunnel>,
     pub broadcast_relay: Arc<BroadcastRelay>,
+    pub upnp_mgr: Arc<Mutex<UpnpManager>>,
     pub to_adapter_tx: mpsc::Sender<Vec<u8>>,
     pub from_net_rx: Option<mpsc::Receiver<Vec<u8>>>,
     pub to_bcast_tx: mpsc::Sender<(u16, Vec<u8>)>,
@@ -60,6 +63,7 @@ impl CoopLinkApp {
 
         let tunnel = Arc::new(NetworkTunnel::new());
         let broadcast_relay = Arc::new(BroadcastRelay::new());
+        let upnp_mgr = Arc::new(Mutex::new(UpnpManager::new()));
 
         // Diagnostic pare-feu initial
         state.firewall_ok = check_firewall_status();
@@ -74,6 +78,7 @@ impl CoopLinkApp {
             rt,
             tunnel,
             broadcast_relay,
+            upnp_mgr,
             to_adapter_tx,
             from_net_rx: Some(from_net_rx),
             to_bcast_tx,
@@ -127,6 +132,23 @@ impl eframe::App for CoopLinkApp {
         // Récupération des pairs et de l'IP virtuelle
         self.state.virtual_ip = *self.tunnel.my_virtual_ip.read();
         self.state.peers = self.tunnel.peers.read().values().cloned().collect();
+
+        // Synchronisation de l'état UPnP
+        match self.upnp_mgr.lock().state().clone() {
+            UpnpState::Active { external_ip, mapped_port, .. } => {
+                self.state.public_ip = Some(external_ip);
+                self.state.upnp_status_text = format!("Ouvert (Port UDP {})", mapped_port);
+            }
+            UpnpState::Searching => {
+                self.state.upnp_status_text = "Recherche de la box...".to_string();
+            }
+            UpnpState::Failed { reason } => {
+                self.state.upnp_status_text = format!("Échec ({})", reason);
+            }
+            UpnpState::Disabled => {
+                self.state.upnp_status_text = "Inactif".to_string();
+            }
+        }
 
         // En-tête arcade rétro
         egui::TopBottomPanel::top("top_panel")
@@ -337,6 +359,25 @@ impl CoopLinkApp {
 
         self.apply_low_metric();
         self.add_log(LogLevel::Success, &format!("Nœud hébergé actif ! IP Virtuelle attribuée: {}", host_ip));
+
+        // Déclenchement de l'ouverture automatique de port UPnP sur la Box
+        if self.config.enable_upnp {
+            self.state.upnp_status_text = "Recherche de la box UPnP...".to_string();
+            let upnp = self.upnp_mgr.clone();
+            let listen_port = port;
+
+            self.rt.spawn_blocking(move || {
+                let mut mgr = upnp.lock();
+                match mgr.open_port(listen_port) {
+                    Ok(ext_ip) => {
+                        tracing::info!("UPnP: Port {} ouvert avec succès sur la box (IP publique: {})", listen_port, ext_ip);
+                    }
+                    Err(e) => {
+                        tracing::warn!("UPnP non disponible ou échoué: {}", e);
+                    }
+                }
+            });
+        }
     }
 
     fn start_client_node(&mut self) {
@@ -399,11 +440,13 @@ impl CoopLinkApp {
     fn disconnect_node(&mut self) {
         self.tunnel.stop();
         self.broadcast_relay.stop();
+        self.upnp_mgr.lock().close_port();
+        self.state.public_ip = None;
         self.state.status = ConnectionStatus::Disconnected;
         self.state.role = NodeRole::Idle;
         self.state.virtual_ip = None;
         self.state.peers.clear();
-        self.add_log(LogLevel::Warning, "Déconnecté de la salle de jeu.");
+        self.add_log(LogLevel::Warning, "Déconnecté de la salle de jeu. Port UPnP refermé.");
     }
 
     fn apply_low_metric(&mut self) {

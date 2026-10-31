@@ -67,6 +67,9 @@ pub struct AppState {
     pub broadcast_packets_relayed: u64,
     pub adapter_name: String,
     pub adapter_status: String,
+    pub upnp_enabled: bool,
+    pub upnp_status_text: String,
+    pub public_ip: Option<Ipv4Addr>,
 }
 
 impl Default for AppState {
@@ -85,6 +88,9 @@ impl Default for AppState {
             broadcast_packets_relayed: 0,
             adapter_name: "CoopLink Virtual Adapter".to_string(),
             adapter_status: "Prêt / En attente".to_string(),
+            upnp_enabled: true,
+            upnp_status_text: "En attente".to_string(),
+            public_ip: None,
         }
     }
 }
