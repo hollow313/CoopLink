@@ -178,21 +178,46 @@ impl CentralTelemetryClient {
                     }
                 }
 
-                // 1. Envoi UDP sur le port 30024 (et port personnalisé éventuel)
+                // 1. Envoi HTTPS prioritaire vers https://cooplink.home-lh.ovh (Reverse Proxy -> port 30024)
+                let raw_cfg = me.configured_central_raw.read().clone();
+                let mut https_urls = vec!["https://cooplink.home-lh.ovh".to_string()];
+                if raw_cfg.starts_with("https://") || raw_cfg.starts_with("http://") {
+                    let clean_url = raw_cfg.trim_end_matches('/').to_string();
+                    if !https_urls.contains(&clean_url) {
+                        https_urls.insert(0, clean_url);
+                    }
+                }
+
+                let mut http_ok = false;
+                for base_url in &https_urls {
+                    let url_clone = base_url.clone();
+                    let snap_clone = snap.clone();
+                    if let Ok(Some(ack)) = tokio::task::spawn_blocking(move || {
+                        send_https_telemetry_curl(&url_clone, &snap_clone)
+                    })
+                    .await
+                    {
+                        *me.assigned_id.write() = ack.assigned_instance_id;
+                        me.server_connected.store(true, Ordering::Relaxed);
+                        http_ok = true;
+                        break;
+                    }
+                }
+
+                // 2. Envoi UDP sur le port 30024 (Domaine OVH + IPs candidates)
                 let discovered_udp = *me.discovered_server.read();
                 if let Some(srv) = discovered_udp {
                     let _ = socket.send_to(&udp_pkt, srv).await;
                 }
+                let _ = socket.send_to(&udp_pkt, "cooplink.home-lh.ovh:30024").await;
                 for ip in &candidate_ips {
                     for udp_port in [30024u16, 30026u16] {
-                        if let Ok(addr) = format!("{}:{}", ip, udp_port).parse::<SocketAddr>() {
-                            let _ = socket.send_to(&udp_pkt, addr).await;
-                        }
+                        let target = format!("{}:{}", ip, udp_port);
+                        let _ = socket.send_to(&udp_pkt, target.as_str()).await;
                     }
                 }
 
-                // 2. Envoi HTTP POST /api/telemetry (supporte 30025, 30026 et tout port mappé sur le NAS/Docker)
-                let mut http_ok = false;
+                // 3. Envoi HTTP direct / LAN fallback (supporte 30024, 30025, 30026 sur le serveur local)
                 let known_endpoint = me.discovered_http_endpoint.read().clone();
                 if let Some(ref endpoint) = known_endpoint {
                     if let Some(ack) = send_http_telemetry_endpoint(endpoint, &snap).await {
@@ -206,7 +231,6 @@ impl CentralTelemetryClient {
 
                 if !http_ok {
                     let mut endpoints_to_try = Vec::new();
-                    let raw_cfg = me.configured_central_raw.read().clone();
                     if let Some(ep) = extract_explicit_endpoint(&raw_cfg) {
                         endpoints_to_try.push(ep);
                     }
@@ -217,7 +241,7 @@ impl CentralTelemetryClient {
                     }
                     for ip in &candidate_ips {
                         if !ip.ends_with(".255") {
-                            for port in [30026u16, 30025u16, 30024u16] {
+                            for port in [30024u16, 30026u16, 30025u16] {
                                 let ep = format!("{}:{}", ip, port);
                                 if !endpoints_to_try.contains(&ep) {
                                     endpoints_to_try.push(ep);
@@ -351,6 +375,42 @@ async fn send_http_telemetry_endpoint(endpoint: &str, payload: &TelemetryPayload
     }
     let json_start = resp_str.find('{')?;
     serde_json::from_str::<TelemetryAck>(&resp_str[json_start..]).ok()
+}
+
+fn send_https_telemetry_curl(base_url: &str, payload: &TelemetryPayload) -> Option<TelemetryAck> {
+    let body = serde_json::to_string(payload).ok()?;
+    let url = format!("{}/api/telemetry", base_url.trim_end_matches('/'));
+    let curl_bin = if cfg!(target_os = "windows") {
+        "curl.exe"
+    } else {
+        "curl"
+    };
+    let out = crate::platform::windows::process::run_hidden(
+        curl_bin,
+        &[
+            "-s",
+            "-L",
+            "-k",
+            "--connect-timeout",
+            "2",
+            "-m",
+            "3",
+            "-X",
+            "POST",
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            &body,
+            &url,
+        ],
+    )
+    .ok()?;
+
+    if !out.status.success() {
+        return None;
+    }
+    let resp_str = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str::<TelemetryAck>(resp_str.trim()).ok()
 }
 
 fn encode_telemetry_packet(payload: &TelemetryPayload) -> Vec<u8> {

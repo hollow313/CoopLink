@@ -45,8 +45,9 @@ ENV PORT_UDP=30024 \
     SERVER_NAME="CoopLink Master Hub" \
     RUST_LOG=info
 
-# Exposition des ports : 30024/udp pour le tunnel et 30025/tcp pour le Web
+# Exposition des ports : 30024/udp (Tunnel P2P), 30024/tcp & 30025/tcp (Web Hub & Reverse Proxy)
 EXPOSE 30024/udp
+EXPOSE 30024/tcp
 EXPOSE 30025/tcp
 
 VOLUME ["/data"]

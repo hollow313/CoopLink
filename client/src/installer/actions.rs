@@ -465,14 +465,19 @@ pub fn setup_silent_firewall(target_exe: &Path) -> Result<()> {
     run_hidden_powershell(&ps_script)
 }
 
-/// Enregistre CoopLink dans le Registre Windows (Applications installées) avec suppression complète de l'icône du Bureau et du Menu Démarrer lors de la désinstallation
+/// Enregistre CoopLink dans le Registre Windows (Applications installées) avec suppression complète de l'icône du Bureau, du Menu Démarrer et de tous les exécutables lors de la désinstallation
 pub fn register_in_windows_uninstall(target_dir: &Path, target_exe: &Path) -> Result<()> {
     let exe_escaped = target_exe.to_string_lossy().replace('\'', "''");
     let dir_escaped = target_dir.to_string_lossy().replace('\'', "''");
+    let prog_dir_escaped = get_default_install_dir().to_string_lossy().replace('\'', "''");
     let local_dir_escaped = get_user_local_install_dir().to_string_lossy().replace('\'', "''");
 
     let ps_script = format!(
-        "$regPath = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CoopLink'; \
+        "$regCoop = 'HKCU:\\Software\\CoopLink'; \
+         if (!(Test-Path $regCoop)) {{ New-Item -Path $regCoop -Force | Out-Null }}; \
+         Set-ItemProperty -Path $regCoop -Name 'Installed' -Value 1 -Force; \
+         Set-ItemProperty -Path $regCoop -Name 'InstallLocation' -Value '{1}' -Force; \
+         $regPath = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CoopLink'; \
          if (!(Test-Path $regPath)) {{ New-Item -Path $regPath -Force | Out-Null }}; \
          Set-ItemProperty -Path $regPath -Name 'DisplayName' -Value 'CoopLink - Virtual LAN & Co-op Game Engine'; \
          Set-ItemProperty -Path $regPath -Name 'DisplayVersion' -Value '1.0.0'; \
@@ -480,53 +485,62 @@ pub fn register_in_windows_uninstall(target_dir: &Path, target_exe: &Path) -> Re
          Set-ItemProperty -Path $regPath -Name 'DisplayIcon' -Value '{0}'; \
          Set-ItemProperty -Path $regPath -Name 'InstallLocation' -Value '{1}'; \
          $uninsCmd = 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command \"' + \
-             'Stop-Process -Name cooplink,cooplink-capture-service,cooplink-stream-viewer -Force -ErrorAction SilentlyContinue; ' + \
+             'Stop-Process -Name cooplink,cooplink-capture-service,cooplink-stream-viewer,unins000 -Force -ErrorAction SilentlyContinue; ' + \
+             'Start-Sleep -Milliseconds 400; ' + \
              '$shortcuts = @(' + \
                  '(Join-Path ([Environment]::GetFolderPath(''Desktop'')) ''CoopLink.lnk''),' + \
                  '(Join-Path ([Environment]::GetFolderPath(''CommonDesktopDirectory'')) ''CoopLink.lnk''),' + \
-                 '\"$env:USERPROFILE\\Desktop\\CoopLink.lnk\",' + \
-                 '\"$env:USERPROFILE\\OneDrive\\Desktop\\CoopLink.lnk\",' + \
-                 '\"$env:USERPROFILE\\OneDrive\\Bureau\\CoopLink.lnk\",' + \
-                 '(Join-Path ([Environment]::GetFolderPath(''Programs'')) ''CoopLink.lnk''),' + \
-                 '\"$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\CoopLink.lnk\"' + \
+                 '(Join-Path $env:USERPROFILE ''Desktop\\CoopLink.lnk''),' + \
+                 '(Join-Path $env:USERPROFILE ''OneDrive\\Desktop\\CoopLink.lnk''),' + \
+                 '(Join-Path $env:USERPROFILE ''OneDrive\\Bureau\\CoopLink.lnk''),' + \
+                 '(Join-Path ([Environment]::GetFolderPath(''Programs'')) ''CoopLink.lnk'')' + \
              '); ' + \
              'foreach ($s in $shortcuts) {{ if ($s -and (Test-Path $s)) {{ Remove-Item -LiteralPath $s -Force -ErrorAction SilentlyContinue }} }}; ' + \
              'Remove-ItemProperty -Path ''HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'' -Name ''CoopLink'' -ErrorAction SilentlyContinue; ' + \
              'Remove-Item -Path ''HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CoopLink'' -Recurse -Force -ErrorAction SilentlyContinue; ' + \
              'Remove-Item -Path ''HKCU:\\Software\\CoopLink'' -Recurse -Force -ErrorAction SilentlyContinue; ' + \
-             'Remove-Item -LiteralPath ''{1}'' -Recurse -Force -ErrorAction SilentlyContinue; ' + \
-             'Remove-Item -LiteralPath ''{2}'' -Recurse -Force -ErrorAction SilentlyContinue\"'; \
+             'foreach ($d in @(''{1}'',''{2}'',''{3}'')) {{ ' + \
+                 'if ($d -and (Test-Path $d)) {{ ' + \
+                     'Get-ChildItem -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; ' + \
+                     'Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue ' + \
+                 '}} ' + \
+             '}}; ' + \
+             'if (Test-Path ''{2}'') {{ Start-Process cmd.exe -Verb RunAs -WindowStyle Hidden -ArgumentList ''/c rd /s /q \"{2}\"'' -ErrorAction SilentlyContinue }}\"'; \
          Set-ItemProperty -Path $regPath -Name 'UninstallString' -Value $uninsCmd; \
          Set-ItemProperty -Path $regPath -Name 'QuietUninstallString' -Value $uninsCmd",
-        exe_escaped, dir_escaped, local_dir_escaped
+        exe_escaped, dir_escaped, prog_dir_escaped, local_dir_escaped
     );
 
     run_hidden_powershell(&ps_script)
 }
 
-/// Exécute la désinstallation complète de CoopLink (supprime l'icône du Bureau, le Menu Démarrer, les règles et les fichiers)
+/// Exécute la désinstallation complète de CoopLink (supprime l'icône du Bureau, le Menu Démarrer, les règles et tous les fichiers dans Program Files et AppData)
 pub fn perform_complete_uninstall() -> Result<()> {
     let prog_dir = get_default_install_dir().to_string_lossy().replace('\'', "''");
     let local_dir = get_user_local_install_dir().to_string_lossy().replace('\'', "''");
 
     let ps = format!(
         "Stop-Process -Name cooplink,cooplink-capture-service,cooplink-stream-viewer -Force -ErrorAction SilentlyContinue; \
+         Start-Sleep -Milliseconds 400; \
          $shortcuts = @( \
              (Join-Path ([Environment]::GetFolderPath('Desktop')) 'CoopLink.lnk'), \
              (Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'CoopLink.lnk'), \
-             \"$env:USERPROFILE\\Desktop\\CoopLink.lnk\", \
-             \"$env:USERPROFILE\\OneDrive\\Desktop\\CoopLink.lnk\", \
-             \"$env:USERPROFILE\\OneDrive\\Bureau\\CoopLink.lnk\", \
-             (Join-Path ([Environment]::GetFolderPath('Programs')) 'CoopLink.lnk'), \
-             \"$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\CoopLink.lnk\" \
+             (Join-Path $env:USERPROFILE 'Desktop\\CoopLink.lnk'), \
+             (Join-Path $env:USERPROFILE 'OneDrive\\Desktop\\CoopLink.lnk'), \
+             (Join-Path $env:USERPROFILE 'OneDrive\\Bureau\\CoopLink.lnk'), \
+             (Join-Path ([Environment]::GetFolderPath('Programs')) 'CoopLink.lnk') \
          ); \
          foreach ($s in $shortcuts) {{ if ($s -and (Test-Path $s)) {{ Remove-Item -LiteralPath $s -Force -ErrorAction SilentlyContinue }} }}; \
          Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'CoopLink' -ErrorAction SilentlyContinue; \
          Remove-Item -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CoopLink' -Recurse -Force -ErrorAction SilentlyContinue; \
          Remove-Item -Path 'HKCU:\\Software\\CoopLink' -Recurse -Force -ErrorAction SilentlyContinue; \
-         Start-Sleep -Milliseconds 300; \
-         Remove-Item -LiteralPath '{0}' -Recurse -Force -ErrorAction SilentlyContinue; \
-         Remove-Item -LiteralPath '{1}' -Recurse -Force -ErrorAction SilentlyContinue",
+         foreach ($d in @('{0}', '{1}')) {{ \
+             if ($d -and (Test-Path $d)) {{ \
+                 Get-ChildItem -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -ne 'unins000.exe' }} | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; \
+                 Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue \
+             }} \
+         }}; \
+         Start-Process cmd.exe -WindowStyle Hidden -ArgumentList '/c ping 127.0.0.1 -n 3 > nul & rd /s /q \"{0}\" & rd /s /q \"{1}\"' -ErrorAction SilentlyContinue",
         prog_dir, local_dir
     );
     run_hidden_powershell(&ps)

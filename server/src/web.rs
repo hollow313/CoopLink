@@ -19,19 +19,41 @@ pub struct WebState {
 }
 
 pub async fn start_web_server(hub: Arc<ServerHub>, config: ServerConfig) {
+    let udp_port = config.udp_port;
+    let web_port = config.web_port;
     let state = WebState { hub, config };
     let app = Router::new()
         .route("/", get(render_dashboard))
         .route("/logo.png", get(serve_logo))
         .route("/api/stats", get(get_stats_api))
         .route("/api/telemetry", post(post_telemetry_api))
-        .with_state(state.clone());
+        .with_state(state);
 
-    let bind_addr = format!("0.0.0.0:{}", state.config.web_port);
-    info!("CoopLink Metrics Web Platform accessible sur http://{}", bind_addr);
+    // 1. Écoute HTTP sur le port 30024 (TCP) pour le Reverse Proxy https://cooplink.home-lh.ovh -> 30024
+    let app_primary = app.clone();
+    let bind_primary = format!("0.0.0.0:{}", udp_port);
+    tokio::spawn(async move {
+        if let Ok(listener) = tokio::net::TcpListener::bind(&bind_primary).await {
+            info!(
+                "CoopLink Web & Reverse Proxy Endpoint actif sur http://{} (TCP)",
+                bind_primary
+            );
+            let _ = axum::serve(listener, app_primary).await;
+        }
+    });
 
-    if let Ok(listener) = tokio::net::TcpListener::bind(&bind_addr).await {
-        let _ = axum::serve(listener, app).await;
+    // 2. Écoute HTTP secondaire sur le port 30025 (TCP)
+    if web_port != udp_port {
+        let bind_secondary = format!("0.0.0.0:{}", web_port);
+        if let Ok(listener) = tokio::net::TcpListener::bind(&bind_secondary).await {
+            info!(
+                "CoopLink Metrics Web Platform accessible sur http://{} (TCP)",
+                bind_secondary
+            );
+            let _ = axum::serve(listener, app).await;
+        }
+    } else {
+        std::future::pending::<()>().await;
     }
 }
 

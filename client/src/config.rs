@@ -6,7 +6,7 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
 fn default_central_server() -> String {
-    "192.168.1.200:30026".to_string()
+    "https://cooplink.home-lh.ovh".to_string()
 }
 
 fn default_instance_uuid() -> u64 {
@@ -86,7 +86,10 @@ impl AppConfig {
         if path.exists() {
             if let Ok(data) = fs::read_to_string(&path) {
                 if let Ok(mut config) = serde_json::from_str::<AppConfig>(&data) {
-                    if config.central_server_address == "127.0.0.1:30024" {
+                    if config.central_server_address == "127.0.0.1:30024"
+                        || config.central_server_address.starts_with("192.168.1.200")
+                        || config.central_server_address.is_empty()
+                    {
                         config.central_server_address = default_central_server();
                     }
                     return config;
