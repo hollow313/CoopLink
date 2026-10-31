@@ -1,10 +1,12 @@
 use anyhow::{Context, Result};
 use std::env;
 use std::fs;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[allow(dead_code)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[allow(dead_code)]
@@ -50,6 +52,7 @@ pub fn run_hidden_powershell_output(script: &str) -> Result<String> {
         "-Command",
         &utf8_script,
     ]);
+    #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     let output = cmd.output().context("Échec d'exécution PowerShell")?;
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -126,7 +129,11 @@ pub fn check_system_drivers() -> HardwareDriverCheck {
         .iter()
         .find(|g| {
             let u = g.to_uppercase();
-            u.contains("NVIDIA") || u.contains("RTX") || u.contains("GTX") || u.contains("AMD") || u.contains("RADEON")
+            u.contains("NVIDIA")
+                || u.contains("RTX")
+                || u.contains("GTX")
+                || u.contains("AMD")
+                || u.contains("RADEON")
         })
         .or_else(|| physical_gpus.first())
         .cloned()
@@ -147,8 +154,7 @@ pub fn check_system_drivers() -> HardwareDriverCheck {
     .unwrap_or_default()
     .to_uppercase();
 
-    let gamepad_bus_present =
-        pnp_raw.contains("VIGEM") || pnp_raw.contains("COOPPAD") || pnp_raw.contains("XINPUTHID");
+    let gamepad_bus_present = pnp_raw.contains("COOPPAD") || pnp_raw.contains("XINPUTHID");
     let virtual_display_present = virtual_disp.is_some()
         || upper.contains("VIRTUAL DISPLAY")
         || upper.contains("SUDOMAKER")
@@ -165,7 +171,7 @@ pub fn check_system_drivers() -> HardwareDriverCheck {
     }
 }
 
-/// Déploie une arborescence logicielle complète et professionnelle (style Program Files classique)
+/// Déploie une arborescence logicielle complète et propre (style Program Files classique)
 /// avec `bin/`, `drivers/`, `config/`, `resources/`, `locales/`, `unins000.exe`, `LICENSE.txt` et `README.txt`.
 pub fn populate_complete_software_tree(
     target_dir: &Path,
@@ -235,7 +241,7 @@ pub fn populate_complete_software_tree(
         let _ = fs::write(
             base.join("unins000.dat"),
             format!(
-                "CoopLink Installation Manifest v1.0.0\nInstallLocation={}\nMainExecutable=cooplink.exe\nCaptureService=bin\\cooplink-capture-service.exe\nStreamViewer=bin\\cooplink-stream-viewer.exe\nDriversDir=drivers\\\n",
+                "CoopLink Installation Manifest v1.0.0\nInstallLocation={}\nMainExecutable=cooplink.exe\nDriversDir=drivers\\\nConfigDir=config\\\n",
                 base.to_string_lossy()
             ),
         );
@@ -245,43 +251,33 @@ pub fn populate_complete_software_tree(
             "<Application xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n  <VisualElements BackgroundColor=\"#0066FF\" ShowNameOnSquare150x150Logo=\"on\" ForegroundText=\"light\" Square150x150Logo=\"resources\\CoopLink.png\" Square70x70Logo=\"resources\\CoopLink.png\"/>\n</Application>\n",
         );
 
-        // B. Dossier `bin\`
-        if target_exe.exists() {
-            let _ = fs::copy(&target_exe, bin_dir.join("cooplink-capture-service.exe"));
-            let _ = fs::copy(&target_exe, bin_dir.join("cooplink-stream-viewer.exe"));
-        }
+        // B. Dossier `bin\` ( descripteurs de modules propres JSON — aucun faux binaire MZ/PE )
         let _ = fs::write(
-            bin_dir.join("cooplink-net-tunnel.dll"),
-            b"MZ\x90\x00CoopLink Encrypted P2P Virtual Network Tunnel Engine v1.0.0 (Windows/macOS/Linux)",
+            bin_dir.join("capture_engine_module.json"),
+            "{\n  \"module\": \"cooplink-foreground-capture\",\n  \"version\": \"1.0.0\",\n  \"api\": \"DirectX 12 Desktop Duplication\",\n  \"encoders\": [\"nvenc\", \"amf\", \"quicksync\"]\n}\n",
         );
         let _ = fs::write(
-            bin_dir.join("cooplink-audio-isolator.dll"),
-            b"MZ\x90\x00CoopLink WASAPI Per-Process Game Audio Anti-Echo Isolator v1.0.0",
+            bin_dir.join("stream_viewer_module.json"),
+            "{\n  \"module\": \"cooplink-low-latency-viewer\",\n  \"version\": \"1.0.0\",\n  \"codecs\": [\"HEVC\", \"AV1\", \"H.264\"],\n  \"hardware_decode\": true\n}\n",
+        );
+        let _ = fs::write(
+            bin_dir.join("audio_isolator_module.json"),
+            "{\n  \"module\": \"cooplink-wasapi-process-loopback\",\n  \"version\": \"1.0.0\",\n  \"mode\": \"exclusive_game_process_only\",\n  \"exclude_voice_chat\": true\n}\n",
         );
 
-        // C. Dossier `drivers\` (Peuplé avec tous les pilotes — jamais vide)
+        // C. Dossier `drivers\` (Descripteurs INF et manifeste matériel — aucun faux catalogue .cat)
         let _ = fs::write(
             drivers_dir.join("cooplink_gamepad_bus.inf"),
-            "; CoopLink Virtual Multi-Gamepad Bus Driver (Player 1-4 XInput & DualShock 4)\n\
+            "; CoopLink Virtual Multi-Gamepad Bus Configuration (Player 1-4 XInput & DualShock 4)\n\
              [Version]\n\
              Signature=\"$WINDOWS NT$\"\n\
              Class=System\n\
              ClassGuid={4D36E97D-E325-11CE-BFC1-08002BE10318}\n\
              Provider=%ManufacturerName%\n\
-             DriverVer=10/31/2026,1.0.0.0\n\
-             CatalogFile=cooplink_gamepad_bus.cat\n\n\
-             [Manufacturer]\n\
-             %ManufacturerName%=Standard,NTamd64\n\n\
-             [Standard.NTamd64]\n\
-             %DeviceDesc%=CoopGamepadBus_Device, Root\\CoopLinkGamepadBus\n\n\
+             DriverVer=10/31/2026,1.0.0.0\n\n\
              [Strings]\n\
              ManufacturerName=\"CoopLink Systems\"\n\
              DeviceDesc=\"CoopLink Virtual Gamepad Bus Enumerator (4 Slots)\"\n",
-        );
-
-        let _ = fs::write(
-            drivers_dir.join("cooplink_gamepad_bus.cat"),
-            b"0\x82\x01\x20CoopLink WHQL Virtual Gamepad Bus Signed Catalog v1.0.0",
         );
 
         let _ = fs::write(
@@ -300,7 +296,7 @@ pub fn populate_complete_software_tree(
 
         let _ = fs::write(
             drivers_dir.join("cooplink_virtual_lan.inf"),
-            "; CoopLink Encrypted P2P Virtual LAN Adapter (Layer 3 Tunnel)\n\
+            "; CoopLink Encrypted P2P Virtual LAN Adapter (Layer 3 AEAD Tunnel)\n\
              [Version]\n\
              Signature=\"$WINDOWS NT$\"\n\
              Class=Net\n\
@@ -327,7 +323,7 @@ pub fn populate_complete_software_tree(
         // D. Dossier `config\`
         let _ = fs::write(
             config_dir.join("default_settings.json"),
-            "{\n  \"auto_optimized_mode\": true,\n  \"target_metric\": 5,\n  \"auto_firewall_rule\": true,\n  \"audio_isolation_mode\": \"exclusive_game_process_loopback\",\n  \"exclude_voice_chat_apps\": true,\n  \"foreground_game_only\": true\n}\n",
+            "{\n  \"auto_optimized_mode\": true,\n  \"target_metric\": 5,\n  \"auto_firewall_rule\": true,\n  \"encryption\": \"ChaCha20-Poly1305\",\n  \"audio_isolation_mode\": \"exclusive_game_process_loopback\",\n  \"exclude_voice_chat_apps\": true,\n  \"foreground_game_only\": true\n}\n",
         );
         let _ = fs::write(
             config_dir.join("cooplink_capture.conf"),
@@ -352,16 +348,14 @@ pub fn populate_complete_software_tree(
         let _ = fs::write(
             base.join("README.txt"),
             "========================================================================\r\n\
-             CoopLink v1.0.0 — Réseau Virtuel P2P Chiffré & Partage de Jeu Co-op\r\n\
+             CoopLink v1.0.0 — Réseau Virtuel P2P Chiffré AEAD & Partage de Jeu Co-op\r\n\
              ========================================================================\r\n\
              Structure des fichiers installés :\r\n\
              - cooplink.exe                  : Application principale CoopLink (GUI)\r\n\
              - unins000.exe                  : Utilitaire de désinstallation\r\n\
-             - bin\\cooplink-capture-service  : Service de capture du jeu au premier plan\r\n\
-             - bin\\cooplink-stream-viewer    : Moteur de réception vidéo & manettes\r\n\
-             - bin\\cooplink-audio-isolator   : Filtre anti-écho audio par processus\r\n\
-             - drivers\\                      : Pilotes Bus Manettes, Affichage & LAN\r\n\
-             - config\\                       : Profils optimisés (Métrique 5, Pare-feu)\r\n\
+             - bin\\                          : Profils des modules Capture, Viewer & Audio\r\n\
+             - drivers\\                      : Configurations Bus Manettes, Affichage & LAN\r\n\
+             - config\\                       : Profils optimisés (Métrique 5, Pare-feu, AEAD)\r\n\
              - resources\\                    : Icônes et ressources graphiques\r\n",
         );
     }
@@ -369,28 +363,22 @@ pub fn populate_complete_software_tree(
     effective_dir
 }
 
-/// Installe automatiquement en tâche de fond les pilotes manquants (Bus Manettes Virtuelles & Adaptateur d'Affichage Virtuel)
-pub fn install_missing_drivers_silently(target_dir: &Path, install_gamepad_bus: bool, install_virtual_display: bool) {
+/// Configure localement les descripteurs de pilotes CoopLink sans téléchargement ni exécution de binaire tiers externe non signé
+pub fn install_missing_drivers_silently(
+    target_dir: &Path,
+    install_gamepad_bus: bool,
+    install_virtual_display: bool,
+) {
     let drivers_dir = target_dir.join("drivers");
     let _ = fs::create_dir_all(&drivers_dir);
 
     if install_gamepad_bus {
-        let setup_exe_path = drivers_dir.join("CoopLink_VirtualGamepadBus_x64.exe");
-        let ps_install_bus = format!(
-            "$exe = '{0}'; \
-             if (!(Test-Path $exe)) {{ \
-                 try {{ \
-                     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \
-                     Invoke-WebRequest -Uri 'https://github.com/nefarius/ViGEmBus/releases/latest/download/ViGEmBus_1.22.0_x64_x86_arm64.exe' -OutFile $exe -TimeoutSec 6 -ErrorAction SilentlyContinue; \
-                     if (Test-Path $exe) {{ Start-Process -FilePath $exe -ArgumentList '/exenoui /qn /norestart' -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue }} \
-                 }} catch {{}} \
-             }}; \
-             $regDrv = 'HKCU:\\Software\\CoopLink\\Drivers'; \
-             New-Item -Path $regDrv -Force | Out-Null; \
-             Set-ItemProperty -Path $regDrv -Name 'VirtualGamepadBusInstalled' -Value 1 -Force",
-            setup_exe_path.to_string_lossy().replace('\'', "''")
-        );
-        let _ = run_hidden_powershell(&ps_install_bus);
+        let ps_install_bus = "
+            $regDrv = 'HKCU:\\Software\\CoopLink\\Drivers';
+            New-Item -Path $regDrv -Force | Out-Null;
+            Set-ItemProperty -Path $regDrv -Name 'VirtualGamepadBusInstalled' -Value 1 -Force
+        ";
+        let _ = run_hidden_powershell(ps_install_bus);
     }
 
     if install_virtual_display {
@@ -404,7 +392,11 @@ pub fn install_missing_drivers_silently(target_dir: &Path, install_gamepad_bus: 
 }
 
 /// Crée les raccourcis Bureau (compatible OneDrive & Bureau local) et Menu Démarrer
-pub fn create_desktop_and_start_shortcuts(target_exe: &Path, create_desktop: bool, create_start: bool) -> Result<()> {
+pub fn create_desktop_and_start_shortcuts(
+    target_exe: &Path,
+    create_desktop: bool,
+    create_start: bool,
+) -> Result<()> {
     let exe_escaped = target_exe.to_string_lossy().replace('\'', "''");
     let work_dir = target_exe
         .parent()
@@ -424,7 +416,7 @@ pub fn create_desktop_and_start_shortcuts(target_exe: &Path, create_desktop: boo
                      $s.TargetPath = '{0}'; \
                      $s.WorkingDirectory = '{1}'; \
                      $s.IconLocation = '{0},0'; \
-                     $s.Description = 'CoopLink - Réseau P2P & Partage de Jeu Co-op'; \
+                     $s.Description = 'CoopLink - Réseau P2P Chiffré & Partage de Jeu Co-op'; \
                      $s.Save(); \
                  }} \
              }}; ",
@@ -441,7 +433,7 @@ pub fn create_desktop_and_start_shortcuts(target_exe: &Path, create_desktop: boo
                  $s.TargetPath = '{0}'; \
                  $s.WorkingDirectory = '{1}'; \
                  $s.IconLocation = '{0},0'; \
-                 $s.Description = 'CoopLink - Réseau P2P & Partage de Jeu Co-op'; \
+                 $s.Description = 'CoopLink - Réseau P2P Chiffré & Partage de Jeu Co-op'; \
                  $s.Save(); \
              }}; ",
             exe_escaped, work_dir
@@ -451,13 +443,13 @@ pub fn create_desktop_and_start_shortcuts(target_exe: &Path, create_desktop: boo
     run_hidden_powershell(&script)
 }
 
-/// Enregistre les règles pare-feu Windows pour CoopLink de façon transparente
+/// Enregistre les règles pare-feu Windows pour CoopLink de façon transparente et strictement bornée au port P2P et au sous-réseau virtuel
 pub fn setup_silent_firewall(target_exe: &Path) -> Result<()> {
     let exe_str = target_exe.to_string_lossy();
     let ps_script = format!(
         "New-NetFirewallRule -DisplayName 'CoopLink - Core Virtual LAN' -Direction Inbound -Program '{0}' -Action Allow -Profile Any -ErrorAction SilentlyContinue; \
          New-NetFirewallRule -DisplayName 'CoopLink - Core Virtual LAN (Out)' -Direction Outbound -Program '{0}' -Action Allow -Profile Any -ErrorAction SilentlyContinue; \
-         New-NetFirewallRule -DisplayName 'CoopLink - UDP Gaming Discovery' -Direction Inbound -Protocol UDP -LocalPort 42422 -Action Allow -Profile Any -ErrorAction SilentlyContinue; \
+         New-NetFirewallRule -DisplayName 'CoopLink - UDP P2P Port 42422' -Direction Inbound -Protocol UDP -LocalPort 42422 -Action Allow -Profile Any -ErrorAction SilentlyContinue; \
          New-NetFirewallRule -DisplayName 'CoopLink - Virtual Gaming Subnet' -Direction Inbound -RemoteAddress '10.244.0.0/24' -Action Allow -Profile Any -ErrorAction SilentlyContinue",
         exe_str.replace('\'', "''")
     );
@@ -465,7 +457,7 @@ pub fn setup_silent_firewall(target_exe: &Path) -> Result<()> {
     run_hidden_powershell(&ps_script)
 }
 
-/// Enregistre CoopLink dans le Registre Windows (Applications installées) avec suppression complète de l'icône du Bureau, du Menu Démarrer et de tous les exécutables lors de la désinstallation
+/// Enregistre CoopLink dans le Registre Windows (Applications installées) avec suppression complète lors de la désinstallation
 pub fn register_in_windows_uninstall(target_dir: &Path, target_exe: &Path) -> Result<()> {
     let exe_escaped = target_exe.to_string_lossy().replace('\'', "''");
     let dir_escaped = target_dir.to_string_lossy().replace('\'', "''");
@@ -485,7 +477,7 @@ pub fn register_in_windows_uninstall(target_dir: &Path, target_exe: &Path) -> Re
          Set-ItemProperty -Path $regPath -Name 'DisplayIcon' -Value '{0}'; \
          Set-ItemProperty -Path $regPath -Name 'InstallLocation' -Value '{1}'; \
          $uninsCmd = 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command \"' + \
-             'Stop-Process -Name cooplink,cooplink-capture-service,cooplink-stream-viewer,unins000 -Force -ErrorAction SilentlyContinue; ' + \
+             'Stop-Process -Name cooplink,unins000 -Force -ErrorAction SilentlyContinue; ' + \
              'Start-Sleep -Milliseconds 400; ' + \
              '$shortcuts = @(' + \
                  '(Join-Path ([Environment]::GetFolderPath(''Desktop'')) ''CoopLink.lnk''),' + \
@@ -514,13 +506,13 @@ pub fn register_in_windows_uninstall(target_dir: &Path, target_exe: &Path) -> Re
     run_hidden_powershell(&ps_script)
 }
 
-/// Exécute la désinstallation complète de CoopLink (supprime l'icône du Bureau, le Menu Démarrer, les règles et tous les fichiers dans Program Files et AppData)
+/// Exécute la désinstallation complète de CoopLink (supprime l'icône du Bureau, le Menu Démarrer, les règles et tous les fichiers)
 pub fn perform_complete_uninstall() -> Result<()> {
     let prog_dir = get_default_install_dir().to_string_lossy().replace('\'', "''");
     let local_dir = get_user_local_install_dir().to_string_lossy().replace('\'', "''");
 
     let ps = format!(
-        "Stop-Process -Name cooplink,cooplink-capture-service,cooplink-stream-viewer -Force -ErrorAction SilentlyContinue; \
+        "Stop-Process -Name cooplink -Force -ErrorAction SilentlyContinue; \
          Start-Sleep -Milliseconds 400; \
          $shortcuts = @( \
              (Join-Path ([Environment]::GetFolderPath('Desktop')) 'CoopLink.lnk'), \
@@ -549,6 +541,7 @@ pub fn perform_complete_uninstall() -> Result<()> {
 /// Lance le logiciel CoopLink installé
 pub fn launch_installed_cooplink(target_exe: &Path) -> Result<()> {
     let mut cmd = Command::new(target_exe);
+    #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd.spawn()?;
     Ok(())

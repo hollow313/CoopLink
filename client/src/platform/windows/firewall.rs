@@ -5,7 +5,6 @@ use tracing::info;
 
 const RULE_NAME_APP: &str = "CoopLink - Core Virtual LAN";
 const RULE_NAME_SUBNET: &str = "CoopLink - Gaming Virtual Subnet";
-const RULE_NAME_BROADCAST: &str = "CoopLink - UDP Gaming Broadcast Discovery";
 
 /// Vérifie si les règles pare-feu de CoopLink sont déjà configurées (sans aucune fenêtre CMD)
 pub fn check_firewall_status() -> bool {
@@ -29,13 +28,25 @@ pub fn check_firewall_status() -> bool {
     false
 }
 
-/// Ajoute ou répare automatiquement les règles de pare-feu Windows pour CoopLink (100% silencieux)
+/// Ajoute ou répare automatiquement les règles de pare-feu Windows pour CoopLink (strictement bornées à CoopLink et au sous-réseau virtuel)
 pub fn setup_firewall_rules(listen_port: u16, subnet_cidr: &str) -> Result<bool> {
     info!("Configuration silencieuse des règles de pare-feu Windows pour CoopLink...");
 
     let current_exe = env::current_exe().unwrap_or_default();
     let exe_path_str = current_exe.to_string_lossy();
     let port_str = listen_port.to_string();
+
+    // Supprime toute ancienne règle générique éventuelle
+    let _ = run_hidden(
+        "netsh",
+        &[
+            "advfirewall",
+            "firewall",
+            "delete",
+            "rule",
+            "name=CoopLink - UDP Gaming Broadcast Discovery",
+        ],
+    );
 
     // 1. Règle pour l'application CoopLink (Inbound / Entrant)
     let _ = run_hidden(
@@ -71,7 +82,7 @@ pub fn setup_firewall_rules(listen_port: u16, subnet_cidr: &str) -> Result<bool>
         ],
     );
 
-    // 3. Règle pour le port UDP de tunneling/signalisation
+    // 3. Règle strictement limitée au port UDP P2P de CoopLink (ex: 42422)
     let _ = run_hidden(
         "netsh",
         &[
@@ -89,7 +100,7 @@ pub fn setup_firewall_rules(listen_port: u16, subnet_cidr: &str) -> Result<bool>
         ],
     );
 
-    // 4. Règle pour le sous-réseau virtuel (autorise tout le trafic entre les amis dans le sous-réseau virtuel)
+    // 4. Règle strictement limitée au sous-réseau virtuel chiffré (10.244.0.0/24)
     let _ = run_hidden(
         "netsh",
         &[
@@ -107,26 +118,7 @@ pub fn setup_firewall_rules(listen_port: u16, subnet_cidr: &str) -> Result<bool>
         ],
     );
 
-    // 5. Règle de broadcast UDP universel pour la découverte de parties LAN
-    let _ = run_hidden(
-        "netsh",
-        &[
-            "advfirewall",
-            "firewall",
-            "add",
-            "rule",
-            &format!("name={}", RULE_NAME_BROADCAST),
-            "dir=in",
-            "action=allow",
-            "protocol=UDP",
-            "localport=any",
-            "remoteip=localsubnet",
-            "enable=yes",
-            "profile=any",
-        ],
-    );
-
-    info!("Règles de pare-feu Windows appliquées en arrière-plan sans aucune fenêtre CMD !");
+    info!("Règles de pare-feu Windows appliquées en arrière-plan (bornées au port UDP {} et au sous-réseau {}) !", port_str, subnet_cidr);
     Ok(true)
 }
 
@@ -137,7 +129,6 @@ pub fn remove_firewall_rules() -> Result<()> {
         RULE_NAME_APP,
         &format!("{} (Out)", RULE_NAME_APP),
         RULE_NAME_SUBNET,
-        RULE_NAME_BROADCAST,
     ];
     for name in &del_rules {
         let _ = run_hidden(

@@ -20,19 +20,21 @@ pub struct WindowsVirtualAdapter {
 
 impl WindowsVirtualAdapter {
     pub fn new() -> (Self, mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) {
-        let (to_adapter_tx, from_net_rx) = mpsc::channel(1000);
-        let (to_net_tx, rx_queue) = mpsc::channel(1000);
+        // Canal 1 : Réseau Tunnel -> Adaptateur Virtuel (paquets entrants à injecter localement)
+        let (net_to_adapter_tx, net_to_adapter_rx) = mpsc::channel(1000);
+        // Canal 2 : Adaptateur Virtuel -> Réseau Tunnel (paquets sortants à expédier vers les pairs)
+        let (adapter_to_net_tx, adapter_to_net_rx) = mpsc::channel(1000);
 
         let adapter = Self {
             adapter_name: "CoopLink Virtual Adapter".to_string(),
             assigned_ip: None,
             metric: 5,
             connected: Arc::new(AtomicBool::new(false)),
-            tx_queue: to_net_tx,
-            rx_queue,
+            tx_queue: adapter_to_net_tx,
+            rx_queue: net_to_adapter_rx,
         };
 
-        (adapter, to_adapter_tx, from_net_rx)
+        (adapter, net_to_adapter_tx, adapter_to_net_rx)
     }
 }
 

@@ -1,4 +1,5 @@
 use std::io::Result;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Output};
 
@@ -8,6 +9,7 @@ pub const CREATE_NO_WINDOW: u32 = 0x08000000;
 pub fn run_hidden(program: &str, args: &[&str]) -> Result<Output> {
     let mut cmd = Command::new(program);
     cmd.args(args);
+    #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd.output()
 }
@@ -16,37 +18,58 @@ pub fn run_hidden(program: &str, args: &[&str]) -> Result<Output> {
 pub fn spawn_hidden(program: &str, args: &[&str]) -> Result<Child> {
     let mut cmd = Command::new(program);
     cmd.args(args);
+    #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd.spawn()
 }
 
 /// Exécute une commande PowerShell en forçant l'encodage UTF-8 pour un affichage parfait des accents (é, è, ê, à...)
 pub fn run_hidden_powershell(script: &str) -> Result<Output> {
-    let utf8_script = format!(
-        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; {}",
-        script
-    );
-    run_hidden(
-        "powershell",
-        &[
-            "-NoProfile",
-            "-NonInteractive",
-            "-WindowStyle",
-            "Hidden",
-            "-Command",
-            &utf8_script,
-        ],
-    )
+    #[cfg(windows)]
+    {
+        let utf8_script = format!(
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; {}",
+            script
+        );
+        run_hidden(
+            "powershell",
+            &[
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                &utf8_script,
+            ],
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = script;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "PowerShell only on Windows",
+        ))
+    }
 }
 
-/// Détecte la langue de l'OS Windows (ex: "fr-FR", "en-US", "es-ES", "de-DE", "pt-PT")
+/// Détecte la langue de l'OS (Windows / macOS / Linux : ex: "fr-FR", "en-US", "es-ES", "de-DE", "pt-PT")
 pub fn detect_windows_os_locale() -> String {
-    if let Ok(out) = run_hidden_powershell("(Get-UICulture).Name") {
-        if out.status.success() {
-            let s = String::from_utf8_lossy(&out.stdout).trim().to_lowercase();
-            if !s.is_empty() {
-                return s;
+    #[cfg(windows)]
+    {
+        if let Ok(out) = run_hidden_powershell("(Get-UICulture).Name") {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout).trim().to_lowercase();
+                if !s.is_empty() {
+                    return s;
+                }
             }
+        }
+    }
+    if let Ok(lang) = std::env::var("LANG") {
+        let s = lang.trim().to_lowercase();
+        if !s.is_empty() {
+            return s;
         }
     }
     "en-us".to_string()

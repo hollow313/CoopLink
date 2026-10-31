@@ -72,7 +72,7 @@ pub struct AppState {
     pub public_ip: Option<Ipv4Addr>,
     pub unique_instance_id: String,
     pub central_server_connected: bool,
-    pub cached_interfaces: Vec<crate::platform::windows::metric::InterfaceMetricInfo>,
+    pub cached_interfaces: Vec<crate::platform::InterfaceMetricInfo>,
     pub is_refreshing_interfaces: bool,
 }
 

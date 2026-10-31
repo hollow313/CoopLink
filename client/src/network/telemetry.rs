@@ -36,9 +36,9 @@ pub struct CentralTelemetryClient {
     pub assigned_id: Arc<RwLock<String>>,
     pub server_connected: Arc<AtomicBool>,
     pub discovered_server: Arc<RwLock<Option<SocketAddr>>>,
+    #[allow(dead_code)]
     pub discovered_http_endpoint: Arc<RwLock<Option<String>>>,
     pub state_snapshot: Arc<RwLock<TelemetryPayload>>,
-    pub target_ips: Arc<RwLock<Vec<String>>>,
     pub configured_central_raw: Arc<RwLock<String>>,
     pub wake_notify: Arc<Notify>,
 }
@@ -46,9 +46,6 @@ pub struct CentralTelemetryClient {
 impl CentralTelemetryClient {
     pub fn new(instance_uuid: u64, player_name: String, central_addr: String) -> Arc<Self> {
         let fallback_id = format!("CL-{}", instance_uuid);
-        let base_ip = extract_host_ip(&central_addr);
-        let mut initial_ips = vec![base_ip, "127.0.0.1".to_string(), "192.168.1.200".to_string()];
-        initial_ips.dedup();
 
         Arc::new(Self {
             assigned_id: Arc::new(RwLock::new(fallback_id)),
@@ -65,12 +62,12 @@ impl CentralTelemetryClient {
                 screen_sharing: false,
                 version: "1.0.0".to_string(),
             })),
-            target_ips: Arc::new(RwLock::new(initial_ips)),
             configured_central_raw: Arc::new(RwLock::new(central_addr)),
             wake_notify: Arc::new(Notify::new()),
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_state(
         &self,
         player_name: &str,
@@ -80,7 +77,7 @@ impl CentralTelemetryClient {
         peer_count: usize,
         screen_sharing: bool,
         central_addr: &str,
-        remote_peer_addr: &str,
+        _remote_peer_addr: &str,
     ) {
         let mut changed = false;
         {
@@ -104,22 +101,6 @@ impl CentralTelemetryClient {
 
         *self.configured_central_raw.write() = central_addr.to_string();
 
-        let mut ips = Vec::new();
-        let c_ip = extract_host_ip(central_addr);
-        if !c_ip.is_empty() && !ips.contains(&c_ip) {
-            ips.push(c_ip);
-        }
-        let r_ip = extract_host_ip(remote_peer_addr);
-        if !r_ip.is_empty() && !ips.contains(&r_ip) {
-            ips.push(r_ip);
-        }
-        for default_ip in ["192.168.1.200", "127.0.0.1"] {
-            if !ips.contains(&default_ip.to_string()) {
-                ips.push(default_ip.to_string());
-            }
-        }
-        *self.target_ips.write() = ips;
-
         if changed {
             self.wake_notify.notify_one();
         }
@@ -129,10 +110,7 @@ impl CentralTelemetryClient {
         let me = self.clone();
         rt.spawn(async move {
             let socket = match UdpSocket::bind("0.0.0.0:0").await {
-                Ok(s) => {
-                    let _ = s.set_broadcast(true);
-                    Arc::new(s)
-                }
+                Ok(s) => Arc::new(s),
                 Err(_) => return,
             };
 
@@ -142,127 +120,64 @@ impl CentralTelemetryClient {
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 4096];
                 while let Ok((len, src)) = sock_rx.recv_from(&mut buf).await {
-                    if len > 10 && &buf[0..4] == PROTOCOL_MAGIC && buf[5] == PKT_INSTANCE_ID_ASSIGNED {
+                    if len > 10 && buf.get(0..4) == Some(PROTOCOL_MAGIC.as_slice()) && buf[5] == PKT_INSTANCE_ID_ASSIGNED {
                         let payload_end = len - 4;
-                        if let Ok(ack) = serde_json::from_slice::<TelemetryAck>(&buf[6..payload_end]) {
-                            *me_rx.assigned_id.write() = ack.assigned_instance_id;
-                            *me_rx.discovered_server.write() = Some(src);
-                            me_rx.server_connected.store(true, Ordering::Relaxed);
+                        if let Some(json_slice) = buf.get(6..payload_end) {
+                            if let Ok(ack) = serde_json::from_slice::<TelemetryAck>(json_slice) {
+                                *me_rx.assigned_id.write() = ack.assigned_instance_id;
+                                *me_rx.discovered_server.write() = Some(src);
+                                me_rx.server_connected.store(true, Ordering::Relaxed);
+                            }
                         }
                     }
                 }
             });
 
-            let mut cycle: u32 = 0;
-            let mut auto_ips: Vec<String> = Vec::new();
-            let mut auto_http_endpoints: Vec<String> = Vec::new();
-
             loop {
-                if !me.server_connected.load(Ordering::Relaxed) && cycle % 6 == 0 {
-                    if let Ok((found_ips, found_endpoints)) =
-                        tokio::task::spawn_blocking(discover_hub_on_system).await
-                    {
-                        auto_ips = found_ips;
-                        auto_http_endpoints = found_endpoints;
-                    }
-                }
-                cycle = cycle.wrapping_add(1);
-
                 let snap = me.state_snapshot.read().clone();
                 let udp_pkt = encode_telemetry_packet(&snap);
+                let raw_cfg = me.configured_central_raw.read().clone();
+                let host_only = extract_host_name(&raw_cfg);
 
-                let mut candidate_ips = me.target_ips.read().clone();
-                for ip in &auto_ips {
-                    if !candidate_ips.contains(ip) {
-                        candidate_ips.push(ip.clone());
-                    }
-                }
-
-                // 1. Envoi UDP rapide en mémoire sur le port 30024 (Domaine OVH + IPs candidates, 0% CPU)
+                // 1. Envoi UDP vers le serveur central configuré (ex: cooplink.home-lh.ovh:30024)
                 let discovered_udp = *me.discovered_server.read();
                 if let Some(srv) = discovered_udp {
                     let _ = socket.send_to(&udp_pkt, srv).await;
                 }
-                let _ = socket.send_to(&udp_pkt, "cooplink.home-lh.ovh:30024").await;
-                for ip in &candidate_ips {
-                    for udp_port in [30024u16, 30026u16] {
-                        let target = format!("{}:{}", ip, udp_port);
-                        let _ = socket.send_to(&udp_pkt, target.as_str()).await;
-                    }
+                if !host_only.is_empty() {
+                    let udp_target = format!("{}:30024", host_only);
+                    let _ = socket.send_to(&udp_pkt, udp_target.as_str()).await;
                 }
 
-                // 2. Envoi HTTP direct / LAN en mémoire (0 processus externe, 0% CPU)
-                let raw_cfg = me.configured_central_raw.read().clone();
-                let mut http_ok = false;
-                let known_endpoint = me.discovered_http_endpoint.read().clone();
-                if let Some(ref endpoint) = known_endpoint {
-                    if let Some(ack) = send_http_telemetry_endpoint(endpoint, &snap).await {
+                // 2. Envoi HTTPS / HTTP vers l'URL configurée (ex: https://cooplink.home-lh.ovh)
+                let mut delivered = false;
+                if let Some(ep) = extract_explicit_socket_endpoint(&raw_cfg) {
+                    if let Some(ack) = send_http_telemetry_endpoint(&ep, &snap).await {
                         *me.assigned_id.write() = ack.assigned_instance_id;
                         me.server_connected.store(true, Ordering::Relaxed);
-                        http_ok = true;
+                        delivered = true;
+                    }
+                }
+
+                if !delivered {
+                    let base_url = if raw_cfg.starts_with("https://") || raw_cfg.starts_with("http://") {
+                        raw_cfg.trim_end_matches('/').to_string()
                     } else {
-                        *me.discovered_http_endpoint.write() = None;
-                    }
-                }
-
-                if !http_ok {
-                    let mut endpoints_to_try = Vec::new();
-                    if let Some(ep) = extract_explicit_endpoint(&raw_cfg) {
-                        endpoints_to_try.push(ep);
-                    }
-                    for ep in &auto_http_endpoints {
-                        if !endpoints_to_try.contains(ep) {
-                            endpoints_to_try.push(ep.clone());
-                        }
-                    }
-                    for ip in &candidate_ips {
-                        if !ip.ends_with(".255") {
-                            for port in [30024u16, 30026u16, 30025u16] {
-                                let ep = format!("{}:{}", ip, port);
-                                if !endpoints_to_try.contains(&ep) {
-                                    endpoints_to_try.push(ep);
-                                }
-                            }
-                        }
-                    }
-
-                    for ep in endpoints_to_try {
-                        if let Some(ack) = send_http_telemetry_endpoint(&ep, &snap).await {
-                            *me.assigned_id.write() = ack.assigned_instance_id;
-                            *me.discovered_http_endpoint.write() = Some(ep);
-                            me.server_connected.store(true, Ordering::Relaxed);
-                            http_ok = true;
-                            break;
-                        }
-                    }
-                }
-
-                // 3. Envoi HTTPS vers https://cooplink.home-lh.ovh (Reverse Proxy -> port 30024)
-                if !http_ok || cycle % 2 == 1 {
-                    let mut https_urls = vec!["https://cooplink.home-lh.ovh".to_string()];
-                    if raw_cfg.starts_with("https://") || raw_cfg.starts_with("http://") {
-                        let clean_url = raw_cfg.trim_end_matches('/').to_string();
-                        if !https_urls.contains(&clean_url) {
-                            https_urls.insert(0, clean_url);
-                        }
-                    }
-                    for base_url in &https_urls {
-                        let url_clone = base_url.clone();
-                        let snap_clone = snap.clone();
-                        if let Ok(Some(ack)) = tokio::task::spawn_blocking(move || {
-                            send_https_telemetry_curl(&url_clone, &snap_clone)
-                        })
-                        .await
-                        {
-                            *me.assigned_id.write() = ack.assigned_instance_id;
-                            me.server_connected.store(true, Ordering::Relaxed);
-                            break;
-                        }
+                        "https://cooplink.home-lh.ovh".to_string()
+                    };
+                    let snap_clone = snap.clone();
+                    if let Ok(Some(ack)) = tokio::task::spawn_blocking(move || {
+                        send_https_telemetry_curl(&base_url, &snap_clone)
+                    })
+                    .await
+                    {
+                        *me.assigned_id.write() = ack.assigned_instance_id;
+                        me.server_connected.store(true, Ordering::Relaxed);
                     }
                 }
 
                 tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                    _ = tokio::time::sleep(Duration::from_secs(6)) => {}
                     _ = me.wake_notify.notified() => {}
                 }
             }
@@ -270,16 +185,21 @@ impl CentralTelemetryClient {
     }
 }
 
-fn extract_host_ip(addr: &str) -> String {
+fn extract_host_name(addr: &str) -> String {
     let trimmed = addr
         .trim()
         .trim_start_matches("http://")
         .trim_start_matches("https://")
         .trim_end_matches('/');
-    trimmed.split(':').next().unwrap_or("127.0.0.1").trim().to_string()
+    trimmed
+        .split(':')
+        .next()
+        .unwrap_or("cooplink.home-lh.ovh")
+        .trim()
+        .to_string()
 }
 
-fn extract_explicit_endpoint(addr: &str) -> Option<String> {
+fn extract_explicit_socket_endpoint(addr: &str) -> Option<String> {
     let trimmed = addr
         .trim()
         .trim_start_matches("http://")
@@ -292,56 +212,9 @@ fn extract_explicit_endpoint(addr: &str) -> Option<String> {
     }
 }
 
-/// Détecte automatiquement les IP de serveurs LAN (ex: NAS TrueNAS 192.168.1.200) et les ports Web actifs (30024..30050)
-fn discover_hub_on_system() -> (Vec<String>, Vec<String>) {
-    let mut ips = Vec::new();
-    let mut endpoints = Vec::new();
-
-    if let Ok(out) = crate::platform::windows::process::run_hidden("netstat", &["-n"]) {
-        if out.status.success() {
-            let text = String::from_utf8_lossy(&out.stdout);
-            for line in text.lines() {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 3 {
-                    let remote = parts[2];
-                    if let Some((ip_part, port_part)) = remote.rsplit_once(':') {
-                        let clean_ip = ip_part.trim_matches(|c| c == '[' || c == ']').to_string();
-                        if let Ok(port_num) = port_part.parse::<u16>() {
-                            // Si le PC (ex: navigateur Web) est connecté sur un port 30000..30100 (ex: 30025, 30026)
-                            if (30000..=30100).contains(&port_num)
-                                && !clean_ip.is_empty()
-                                && clean_ip != "0.0.0.0"
-                                && clean_ip != "::"
-                            {
-                                let ep = format!("{}:{}", clean_ip, port_num);
-                                if !endpoints.contains(&ep) {
-                                    endpoints.push(ep);
-                                }
-                                if !ips.contains(&clean_ip) {
-                                    ips.push(clean_ip.clone());
-                                }
-                            }
-                            // Collecte aussi les serveurs LAN locaux (ex: 192.168.1.200)
-                            if (clean_ip.starts_with("192.168.") || clean_ip.starts_with("10."))
-                                && !clean_ip.ends_with(".1")
-                                && !clean_ip.ends_with(".255")
-                                && !ips.contains(&clean_ip)
-                            {
-                                ips.push(clean_ip);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    (ips, endpoints)
-}
-
 async fn send_http_telemetry_endpoint(endpoint: &str, payload: &TelemetryPayload) -> Option<TelemetryAck> {
     let addr: SocketAddr = endpoint.parse().ok()?;
-    let mut stream = tokio::time::timeout(Duration::from_millis(300), TcpStream::connect(addr))
+    let mut stream = tokio::time::timeout(Duration::from_millis(400), TcpStream::connect(addr))
         .await
         .ok()?
         .ok()?;
@@ -359,13 +232,13 @@ async fn send_http_telemetry_endpoint(endpoint: &str, payload: &TelemetryPayload
         body
     );
 
-    tokio::time::timeout(Duration::from_millis(300), stream.write_all(req.as_bytes()))
+    tokio::time::timeout(Duration::from_millis(400), stream.write_all(req.as_bytes()))
         .await
         .ok()?
         .ok()?;
 
     let mut resp_buf = Vec::with_capacity(1024);
-    tokio::time::timeout(Duration::from_millis(300), stream.read_to_end(&mut resp_buf))
+    tokio::time::timeout(Duration::from_millis(400), stream.read_to_end(&mut resp_buf))
         .await
         .ok()?
         .ok()?;
@@ -391,7 +264,6 @@ fn send_https_telemetry_curl(base_url: &str, payload: &TelemetryPayload) -> Opti
         &[
             "-s",
             "-L",
-            "-k",
             "--connect-timeout",
             "2",
             "-m",

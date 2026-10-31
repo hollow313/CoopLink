@@ -159,13 +159,27 @@ impl ServerHub {
                     self.handle_instance_heartbeat(src_endpoint, payload, socket).await;
                 }
             }
-            // Handshake de salon P2P
+            // Handshake de salon P2P (avec vérification stricte des bornes pour empêcher tout crash distant)
             0x01 => {
-                let name_len = buf[7] as usize;
-                let client_name = String::from_utf8_lossy(&buf[8..8 + name_len]).to_string();
-                let code_offset = 8 + name_len;
-                let code_len = buf[code_offset] as usize;
-                let room_code = String::from_utf8_lossy(&buf[code_offset + 1..code_offset + 1 + code_len]).to_string();
+                let Some(&name_len_u8) = buf.get(7) else { return; };
+                let name_len = name_len_u8 as usize;
+                let Some(name_end) = 8usize.checked_add(name_len) else { return; };
+                if name_end >= payload_len {
+                    return;
+                }
+                let Some(name_slice) = buf.get(8..name_end) else { return; };
+                let client_name = String::from_utf8_lossy(name_slice).to_string();
+
+                let code_offset = name_end;
+                let Some(&code_len_u8) = buf.get(code_offset) else { return; };
+                let code_len = code_len_u8 as usize;
+                let Some(code_start) = code_offset.checked_add(1) else { return; };
+                let Some(code_end) = code_start.checked_add(code_len) else { return; };
+                if code_end > payload_len {
+                    return;
+                }
+                let Some(code_slice) = buf.get(code_start..code_end) else { return; };
+                let room_code = String::from_utf8_lossy(code_slice).to_string();
 
                 self.handle_handshake(src_endpoint, client_name, room_code, socket).await;
             }

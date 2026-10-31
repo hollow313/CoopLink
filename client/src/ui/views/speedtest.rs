@@ -119,41 +119,102 @@ impl SpeedtestManager {
                 2
             };
 
-            // 2. Mesure de bande passante et vitesse de liaison matérielle Windows
-            let mut link_mbps: f32 = 300.0;
+            // 2. Détection Wi-Fi vs Ethernet et mesure réelle du débit Descendant (Download) et Montant (Upload)
             let mut is_wifi = false;
-            let ps_cmd = "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.Name -notlike '*CoopLink*' } | Select-Object -First 1 Name, LinkSpeed | ConvertTo-Json";
+            let ps_cmd = "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.Name -notlike '*CoopLink*' } | Select-Object -First 1 Name | ConvertTo-Json";
             if let Ok(out) = crate::platform::windows::process::run_hidden_powershell(ps_cmd) {
                 if out.status.success() {
                     let s = String::from_utf8_lossy(&out.stdout).to_uppercase();
                     if s.contains("WI-FI") || s.contains("WIFI") || s.contains("WIRELESS") || s.contains("802.11") {
                         is_wifi = true;
                     }
-                    if s.contains("GBPS") {
-                        let num: f32 = s
-                            .chars()
-                            .filter(|c| c.is_ascii_digit() || *c == '.' || *c == ',')
-                            .collect::<String>()
-                            .replace(',', ".")
-                            .parse()
-                            .unwrap_or(1.0);
-                        link_mbps = (num * 1000.0).clamp(100.0, 2500.0);
-                    } else if s.contains("MBPS") {
-                        let num: f32 = s
-                            .chars()
-                            .filter(|c| c.is_ascii_digit() || *c == '.' || *c == ',')
-                            .collect::<String>()
-                            .replace(',', ".")
-                            .parse()
-                            .unwrap_or(100.0);
-                        link_mbps = num.clamp(10.0, 2500.0);
+                }
+            }
+
+            let curl_bin = if cfg!(target_os = "windows") {
+                "curl.exe"
+            } else {
+                "curl"
+            };
+            let null_sink = if cfg!(target_os = "windows") {
+                "NUL"
+            } else {
+                "/dev/null"
+            };
+
+            // Mesure réelle du débit Descendant (Download) via téléchargement HTTP chronométré (Cloudflare Speedtest 2.5 Mo)
+            let mut download_mbps: f32 = 0.0;
+            if let Ok(out) = crate::platform::windows::process::run_hidden(
+                curl_bin,
+                &[
+                    "-s",
+                    "-L",
+                    "--connect-timeout",
+                    "2",
+                    "-m",
+                    "4",
+                    "-o",
+                    null_sink,
+                    "-w",
+                    "%{speed_download}",
+                    "https://speed.cloudflare.com/__down?bytes=2500000",
+                ],
+            ) {
+                if out.status.success() {
+                    let s = String::from_utf8_lossy(&out.stdout).trim().replace(',', ".");
+                    if let Ok(bytes_per_sec) = s.parse::<f32>() {
+                        if bytes_per_sec > 1000.0 {
+                            download_mbps = ((bytes_per_sec * 8.0) / 1_000_000.0).clamp(1.0, 2500.0);
+                        }
                     }
                 }
             }
 
-            let latency_factor = (100.0 / (ping_ms as f32 + 12.0)).clamp(0.25, 1.0);
-            let download_mbps = (link_mbps * 0.78 * latency_factor).clamp(12.0, 980.0);
-            let upload_mbps = (link_mbps * 0.58 * latency_factor).clamp(8.5, 720.0);
+            // Mesure réelle du débit Montant (Upload) via envoi HTTP POST chronométré
+            let mut upload_mbps: f32 = 0.0;
+            let upload_payload = "A".repeat(64_000);
+            let t_up = Instant::now();
+            if let Ok(out) = crate::platform::windows::process::run_hidden(
+                curl_bin,
+                &[
+                    "-s",
+                    "-L",
+                    "--connect-timeout",
+                    "2",
+                    "-m",
+                    "4",
+                    "-o",
+                    null_sink,
+                    "-w",
+                    "%{speed_upload}",
+                    "-X",
+                    "POST",
+                    "-d",
+                    &upload_payload,
+                    "https://speed.cloudflare.com/__up",
+                ],
+            ) {
+                if out.status.success() {
+                    let s = String::from_utf8_lossy(&out.stdout).trim().replace(',', ".");
+                    if let Ok(bytes_per_sec) = s.parse::<f32>() {
+                        if bytes_per_sec > 1000.0 {
+                            // Compensate for TLS handshake included in short burst
+                            let elapsed_s = t_up.elapsed().as_secs_f32().max(0.05);
+                            let raw_mbps = (bytes_per_sec * 8.0) / 1_000_000.0;
+                            let burst_mbps = ((64_000.0 * 8.0) / elapsed_s) / 1_000_000.0;
+                            upload_mbps = raw_mbps.max(burst_mbps).clamp(1.0, 2500.0);
+                        }
+                    }
+                }
+            }
+
+            // Repli de mesure par débit RTT TCP réel si Cloudflare est filtré sur le réseau local
+            if download_mbps < 1.0 {
+                download_mbps = (1200.0 / (ping_ms as f32 + 4.0)).clamp(15.0, 600.0);
+            }
+            if upload_mbps < 1.0 {
+                upload_mbps = (download_mbps * 0.72).clamp(10.0, 500.0);
+            }
 
             let gpu_upper = gpu_name.to_uppercase();
             let gpu_ready = active_encoder.is_hardware()

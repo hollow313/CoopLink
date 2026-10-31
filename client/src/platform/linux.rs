@@ -10,18 +10,30 @@ use tracing::info;
 #[allow(dead_code)]
 pub fn check_firewall_status() -> bool {
     if let Ok(out) = Command::new("iptables").args(["-L", "INPUT", "-n"]).output() {
-        let s = String::from_utf8_lossy(&out.stdout);
-        if s.contains("42422") || s.contains("10.244.0.0/24") {
-            return true;
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            if s.contains("42422") || s.contains("10.244.0.0/24") || s.contains("cooplink0") {
+                return true;
+            }
         }
     }
     if let Ok(out) = Command::new("ufw").arg("status").output() {
-        let s = String::from_utf8_lossy(&out.stdout);
-        if s.contains("42422") || s.contains("10.244.0.0/24") || s.contains("inactive") {
-            return true;
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            if s.contains("42422") || s.contains("10.244.0.0/24") || s.contains("inactive") {
+                return true;
+            }
         }
     }
-    true
+    if let Ok(out) = Command::new("nft").args(["list", "ruleset"]).output() {
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            if s.contains("42422") || s.contains("10.244.0.0/24") {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Configure automatiquement les règles de pare-feu sur Linux (UFW + iptables + nftables) dès le premier lancement

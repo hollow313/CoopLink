@@ -1,19 +1,26 @@
-use crate::network::protocol::{CoopPacket, PROTOCOL_VERSION};
-use crate::types::{NodeRole, PeerInfo};
+use crate::network::protocol::{
+    compute_handshake_auth_tag, constant_time_eq, derive_session_key, CoopPacket, PROTOCOL_VERSION,
+};
+use crate::types::{ConnectionStatus, NodeRole, PeerInfo};
 use anyhow::Result;
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
+
+const MAX_AUTH_FAILURES_PER_WINDOW: u32 = 5;
+const AUTH_RATE_LIMIT_WINDOW_SECS: u64 = 30;
 
 pub struct NetworkTunnel {
     pub running: Arc<AtomicBool>,
     pub role: Arc<RwLock<NodeRole>>,
+    pub conn_status: Arc<RwLock<ConnectionStatus>>,
+    pub last_error: Arc<RwLock<Option<String>>>,
     pub my_id: u64,
     pub my_virtual_ip: Arc<RwLock<Option<Ipv4Addr>>>,
     pub peers: Arc<RwLock<HashMap<u64, PeerInfo>>>,
@@ -29,6 +36,8 @@ impl NetworkTunnel {
         Self {
             running: Arc::new(AtomicBool::new(false)),
             role: Arc::new(RwLock::new(NodeRole::Idle)),
+            conn_status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
+            last_error: Arc::new(RwLock::new(None)),
             my_id,
             my_virtual_ip: Arc::new(RwLock::new(None)),
             peers: Arc::new(RwLock::new(HashMap::new())),
@@ -39,12 +48,14 @@ impl NetworkTunnel {
         }
     }
 
-    /// Démarre en mode Hôte (Room Master / Nœud Maître)
+    /// Démarre en mode Hôte (Room Master / Nœud Maître) avec chiffrement AEAD ChaCha20-Poly1305
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_host(
         &self,
         port: u16,
         player_name: String,
         room_code: String,
+        room_password: String,
         host_virtual_ip: Ipv4Addr,
         to_adapter_tx: mpsc::Sender<Vec<u8>>,
         mut from_adapter_rx: mpsc::Receiver<Vec<u8>>,
@@ -52,12 +63,19 @@ impl NetworkTunnel {
         mut from_bcast_rx: mpsc::Receiver<(u16, Vec<u8>)>,
     ) -> Result<()> {
         *self.role.write() = NodeRole::Host;
+        *self.conn_status.write() = ConnectionStatus::Hosting;
+        *self.last_error.write() = None;
         *self.my_virtual_ip.write() = Some(host_virtual_ip);
         self.running.store(true, Ordering::SeqCst);
 
+        let session_key = derive_session_key(&room_code, &room_password);
+
         let bind_addr = format!("0.0.0.0:{}", port);
         let socket = Arc::new(UdpSocket::bind(&bind_addr).await?);
-        info!("CoopLink Nœud Maître démarré sur UDP {}", bind_addr);
+        info!(
+            "CoopLink Nœud Maître AEAD démarré sur UDP {} (Chiffrement ChaCha20-Poly1305 actif)",
+            bind_addr
+        );
 
         // Ajoute l'hôte lui-même à la liste des pairs
         {
@@ -70,7 +88,7 @@ impl NetworkTunnel {
                     virtual_ip: host_virtual_ip,
                     endpoint: socket.local_addr()?,
                     ping_ms: 0,
-                    last_seen_secs: 0,
+                    last_seen_secs: current_timestamp_secs(),
                     is_host: true,
                     bytes_sent: 0,
                     bytes_recv: 0,
@@ -86,168 +104,268 @@ impl NetworkTunnel {
         let rx_counter = self.bytes_rx.clone();
         let tx_counter = self.bytes_tx.clone();
 
-        // Tâche de réception UDP principale
+        // Tâche de réception UDP principale (avec anti-spoofing, rate-limiting et AEAD)
         tokio::spawn(async move {
             let mut buf = vec![0u8; 65535];
             let mut next_client_ip_suffix: u8 = 2; // Host = .1, Clients = .2, .3, .4 ...
+            let mut auth_failures: HashMap<IpAddr, (u32, u64)> = HashMap::new();
 
             while running_flag.load(Ordering::Relaxed) {
                 match socket_rx.recv_from(&mut buf).await {
                     Ok((len, src_endpoint)) => {
                         rx_counter.fetch_add(len as u64, Ordering::Relaxed);
-                        if let Ok(packet) = CoopPacket::decode(&buf[..len]) {
-                            match packet {
-                                CoopPacket::HandshakeRequest {
-                                    player_name: client_name,
-                                    room_code: req_room_code,
-                                    ..
-                                } => {
-                                    if req_room_code != room_code {
-                                        let resp = CoopPacket::HandshakeResponse {
-                                            success: false,
-                                            assigned_ip: Ipv4Addr::UNSPECIFIED,
-                                            assigned_id: 0,
-                                            host_name: player_name.clone(),
-                                            error_msg: "Code de salle incorrect".to_string(),
-                                        };
-                                        let encoded = resp.encode();
-                                        let _ = socket_rx.send_to(&encoded, src_endpoint).await;
-                                        continue;
-                                    }
+                        let now_secs = current_timestamp_secs();
+                        let src_ip_addr = src_endpoint.ip();
 
-                                    let new_id = rand::random::<u64>();
-                                    let assigned_ip = Ipv4Addr::new(
-                                        host_virtual_ip.octets()[0],
-                                        host_virtual_ip.octets()[1],
-                                        host_virtual_ip.octets()[2],
-                                        next_client_ip_suffix,
+                        // Vérification du Rate-Limiting anti brute-force par IP
+                        if let Some((fails, window_start)) = auth_failures.get_mut(&src_ip_addr) {
+                            if now_secs.saturating_sub(*window_start) > AUTH_RATE_LIMIT_WINDOW_SECS {
+                                *fails = 0;
+                                *window_start = now_secs;
+                            } else if *fails >= MAX_AUTH_FAILURES_PER_WINDOW {
+                                debug!("Paquet ignoré depuis {} (rate-limit anti brute-force actif)", src_ip_addr);
+                                continue;
+                            }
+                        }
+
+                        let decoded = CoopPacket::decode_encrypted(&buf[..len], &session_key);
+                        let packet = match decoded {
+                            Ok(pkt) => pkt,
+                            Err(_) => {
+                                let entry = auth_failures.entry(src_ip_addr).or_insert((0, now_secs));
+                                entry.0 = entry.0.saturating_add(1);
+                                continue;
+                            }
+                        };
+
+                        match packet {
+                            CoopPacket::HandshakeRequest {
+                                player_name: client_name,
+                                room_code: req_auth_hex,
+                                ..
+                            } => {
+                                let expected_tag = compute_handshake_auth_tag(
+                                    &room_code,
+                                    &room_password,
+                                    &client_name,
+                                );
+                                let expected_hex = hex_encode(&expected_tag);
+
+                                if !constant_time_eq(req_auth_hex.as_bytes(), expected_hex.as_bytes()) {
+                                    let entry = auth_failures.entry(src_ip_addr).or_insert((0, now_secs));
+                                    entry.0 = entry.0.saturating_add(1);
+                                    warn!(
+                                        "Tentative de Handshake avec code/mot de passe invalide depuis {}",
+                                        src_endpoint
                                     );
-                                    next_client_ip_suffix = next_client_ip_suffix.saturating_add(1);
-
-                                    let peer = PeerInfo {
-                                        id: new_id,
-                                        name: client_name.clone(),
-                                        virtual_ip: assigned_ip,
-                                        endpoint: src_endpoint,
-                                        ping_ms: 10,
-                                        last_seen_secs: current_timestamp_secs(),
-                                        is_host: false,
-                                        bytes_sent: 0,
-                                        bytes_recv: len as u64,
-                                    };
-
-                                    peers_map.write().insert(new_id, peer.clone());
-                                    ep_map.write().insert(src_endpoint, new_id);
-                                    ip_map.write().insert(assigned_ip, new_id);
-
-                                    info!(
-                                        "Nouveau client connecté au salon: {} [{}] assigné à {}",
-                                        client_name, src_endpoint, assigned_ip
-                                    );
-
                                     let resp = CoopPacket::HandshakeResponse {
-                                        success: true,
-                                        assigned_ip,
-                                        assigned_id: new_id,
+                                        success: false,
+                                        assigned_ip: Ipv4Addr::UNSPECIFIED,
+                                        assigned_id: 0,
                                         host_name: player_name.clone(),
-                                        error_msg: String::new(),
+                                        error_msg: "Code de salon ou mot de passe incorrect".to_string(),
                                     };
-                                    let encoded = resp.encode();
-                                    tx_counter.fetch_add(encoded.len() as u64, Ordering::Relaxed);
+                                    let encoded = resp.encode_encrypted(&session_key);
                                     let _ = socket_rx.send_to(&encoded, src_endpoint).await;
-
-                                    // Diffuse la mise à jour de la liste des pairs à tous les clients
-                                    let peer_list_json = serde_json::to_string(&*peers_map.read()).unwrap_or_default();
-                                    let update_pkt = CoopPacket::PeerListUpdate {
-                                        raw_json: peer_list_json,
-                                    }
-                                    .encode();
-
-                                    let client_endpoints: Vec<SocketAddr> = peers_map
-                                        .read()
-                                        .values()
-                                        .filter(|p| !p.is_host)
-                                        .map(|p| p.endpoint)
-                                        .collect();
-
-                                    for ep in client_endpoints {
-                                        let _ = socket_rx.send_to(&update_pkt, ep).await;
-                                    }
+                                    continue;
                                 }
-                                CoopPacket::Ping { seq, timestamp_ms } => {
-                                    let pong = CoopPacket::Pong { seq, timestamp_ms }.encode();
+
+                                // Si ce client était déjà enregistré sur ce même endpoint, réutiliser son IP/ID
+                                let (assigned_id, assigned_ip) =
+                                    if let Some(&existing_id) = ep_map.read().get(&src_endpoint) {
+                                        if let Some(existing_peer) = peers_map.read().get(&existing_id) {
+                                            (existing_id, existing_peer.virtual_ip)
+                                        } else {
+                                            let nid = rand::random::<u64>();
+                                            let ip = Ipv4Addr::new(
+                                                host_virtual_ip.octets()[0],
+                                                host_virtual_ip.octets()[1],
+                                                host_virtual_ip.octets()[2],
+                                                next_client_ip_suffix,
+                                            );
+                                            next_client_ip_suffix = next_client_ip_suffix.saturating_add(1);
+                                            (nid, ip)
+                                        }
+                                    } else {
+                                        let nid = rand::random::<u64>();
+                                        let ip = Ipv4Addr::new(
+                                            host_virtual_ip.octets()[0],
+                                            host_virtual_ip.octets()[1],
+                                            host_virtual_ip.octets()[2],
+                                            next_client_ip_suffix,
+                                        );
+                                        next_client_ip_suffix = next_client_ip_suffix.saturating_add(1);
+                                        (nid, ip)
+                                    };
+
+                                let peer = PeerInfo {
+                                    id: assigned_id,
+                                    name: client_name.clone(),
+                                    virtual_ip: assigned_ip,
+                                    endpoint: src_endpoint,
+                                    ping_ms: 10,
+                                    last_seen_secs: now_secs,
+                                    is_host: false,
+                                    bytes_sent: 0,
+                                    bytes_recv: len as u64,
+                                };
+
+                                peers_map.write().insert(assigned_id, peer);
+                                ep_map.write().insert(src_endpoint, assigned_id);
+                                ip_map.write().insert(assigned_ip, assigned_id);
+
+                                info!(
+                                    "Client authentifié connecté au salon: {} [{}] -> {}",
+                                    client_name, src_endpoint, assigned_ip
+                                );
+
+                                let resp = CoopPacket::HandshakeResponse {
+                                    success: true,
+                                    assigned_ip,
+                                    assigned_id,
+                                    host_name: player_name.clone(),
+                                    error_msg: String::new(),
+                                };
+                                let encoded = resp.encode_encrypted(&session_key);
+                                tx_counter.fetch_add(encoded.len() as u64, Ordering::Relaxed);
+                                let _ = socket_rx.send_to(&encoded, src_endpoint).await;
+
+                                // Diffuse la mise à jour de la liste des pairs à tous les clients authentifiés
+                                let peer_list_json =
+                                    serde_json::to_string(&*peers_map.read()).unwrap_or_default();
+                                let update_pkt = CoopPacket::PeerListUpdate {
+                                    raw_json: peer_list_json,
+                                }
+                                .encode_encrypted(&session_key);
+
+                                let client_endpoints: Vec<SocketAddr> = peers_map
+                                    .read()
+                                    .values()
+                                    .filter(|p| !p.is_host)
+                                    .map(|p| p.endpoint)
+                                    .collect();
+
+                                for ep in client_endpoints {
+                                    let _ = socket_rx.send_to(&update_pkt, ep).await;
+                                }
+                            }
+                            CoopPacket::Ping { seq, timestamp_ms } => {
+                                // Ne répond qu'aux pairs authentifiés
+                                if ep_map.read().contains_key(&src_endpoint) {
+                                    let pong = CoopPacket::Pong { seq, timestamp_ms }
+                                        .encode_encrypted(&session_key);
                                     let _ = socket_rx.send_to(&pong, src_endpoint).await;
                                 }
-                                CoopPacket::Pong { timestamp_ms, .. } => {
-                                    let now_ms = current_timestamp_ms();
-                                    let rtt = (now_ms.saturating_sub(timestamp_ms)).min(999) as u32;
-                                    if let Some(&peer_id) = ep_map.read().get(&src_endpoint) {
-                                        if let Some(peer) = peers_map.write().get_mut(&peer_id) {
-                                            peer.ping_ms = rtt;
-                                            peer.last_seen_secs = current_timestamp_secs();
-                                        }
+                            }
+                            CoopPacket::Pong { timestamp_ms, .. } => {
+                                let now_ms = current_timestamp_ms();
+                                let rtt = (now_ms.saturating_sub(timestamp_ms)).min(999) as u32;
+                                if let Some(&peer_id) = ep_map.read().get(&src_endpoint) {
+                                    if let Some(peer) = peers_map.write().get_mut(&peer_id) {
+                                        peer.ping_ms = rtt;
+                                        peer.last_seen_secs = now_secs;
                                     }
                                 }
-                                CoopPacket::TunnelData {
-                                    src_ip,
-                                    dst_ip,
-                                    payload,
-                                } => {
-                                    if dst_ip == host_virtual_ip {
-                                        let _ = to_adapter_tx.send(payload).await;
-                                    } else {
-                                        let target_ep = {
-                                            let ip_m = ip_map.read();
-                                            let p_m = peers_map.read();
-                                            ip_m.get(&dst_ip)
-                                                .and_then(|tid| p_m.get(tid))
-                                                .map(|p| p.endpoint)
-                                        };
+                            }
+                            CoopPacket::TunnelData {
+                                src_ip,
+                                dst_ip,
+                                payload,
+                            } => {
+                                // Vérification anti-usurpation d'IP (src_ip doit correspondre au pair enregistré pour src_endpoint)
+                                let authorized = {
+                                    let ep_m = ep_map.read();
+                                    let p_m = peers_map.read();
+                                    ep_m.get(&src_endpoint)
+                                        .and_then(|pid| p_m.get(pid))
+                                        .map(|peer| peer.virtual_ip == src_ip)
+                                        .unwrap_or(false)
+                                };
+                                if !authorized {
+                                    warn!(
+                                        "Tentative d'usurpation IP (TunnelData src_ip={}) rejetée depuis {}",
+                                        src_ip, src_endpoint
+                                    );
+                                    continue;
+                                }
 
-                                        if let Some(ep) = target_ep {
-                                            let fwd = CoopPacket::TunnelData {
-                                                src_ip,
-                                                dst_ip,
-                                                payload,
-                                            }
-                                            .encode();
-                                            let _ = socket_rx.send_to(&fwd, ep).await;
+                                if dst_ip == host_virtual_ip {
+                                    let _ = to_adapter_tx.send(payload).await;
+                                } else {
+                                    let target_ep = {
+                                        let ip_m = ip_map.read();
+                                        let p_m = peers_map.read();
+                                        ip_m.get(&dst_ip)
+                                            .and_then(|tid| p_m.get(tid))
+                                            .map(|p| p.endpoint)
+                                    };
+
+                                    if let Some(ep) = target_ep {
+                                        let fwd = CoopPacket::TunnelData {
+                                            src_ip,
+                                            dst_ip,
+                                            payload,
                                         }
+                                        .encode_encrypted(&session_key);
+                                        let _ = socket_rx.send_to(&fwd, ep).await;
                                     }
                                 }
-                                CoopPacket::BroadcastGaming {
+                            }
+                            CoopPacket::BroadcastGaming {
+                                src_ip,
+                                port,
+                                payload,
+                            } => {
+                                // Vérification anti-usurpation d'IP sur les broadcasts
+                                let authorized = {
+                                    let ep_m = ep_map.read();
+                                    let p_m = peers_map.read();
+                                    ep_m.get(&src_endpoint)
+                                        .and_then(|pid| p_m.get(pid))
+                                        .map(|peer| peer.virtual_ip == src_ip)
+                                        .unwrap_or(false)
+                                };
+                                if !authorized {
+                                    continue;
+                                }
+
+                                let _ = to_bcast_tx.send((port, payload.clone())).await;
+
+                                let bcast_pkt = CoopPacket::BroadcastGaming {
                                     src_ip,
                                     port,
                                     payload,
-                                } => {
-                                    // Relaye à l'adaptateur local
-                                    let _ = to_bcast_tx.send((port, payload.clone())).await;
-
-                                    // Relaye à tous les autres pairs du salon
-                                    let bcast_pkt = CoopPacket::BroadcastGaming {
-                                        src_ip,
-                                        port,
-                                        payload,
-                                    }
-                                    .encode();
-
-                                    let other_endpoints: Vec<SocketAddr> = peers_map
-                                        .read()
-                                        .values()
-                                        .filter(|p| !p.is_host && p.endpoint != src_endpoint)
-                                        .map(|p| p.endpoint)
-                                        .collect();
-
-                                    for ep in other_endpoints {
-                                        let _ = socket_rx.send_to(&bcast_pkt, ep).await;
-                                    }
                                 }
-                                CoopPacket::Disconnect { peer_id, .. } => {
-                                    peers_map.write().remove(&peer_id);
-                                    info!("Client {} s'est déconnecté du salon", peer_id);
+                                .encode_encrypted(&session_key);
+
+                                let other_endpoints: Vec<SocketAddr> = peers_map
+                                    .read()
+                                    .values()
+                                    .filter(|p| !p.is_host && p.endpoint != src_endpoint)
+                                    .map(|p| p.endpoint)
+                                    .collect();
+
+                                for ep in other_endpoints {
+                                    let _ = socket_rx.send_to(&bcast_pkt, ep).await;
                                 }
-                                _ => {}
                             }
+                            CoopPacket::Disconnect { peer_id, .. } => {
+                                // Vérifie que l'expéditeur ne peut déconnecter que lui-même (jamais un autre joueur)
+                                let is_owner = ep_map.read().get(&src_endpoint) == Some(&peer_id);
+                                if is_owner {
+                                    ep_map.write().remove(&src_endpoint);
+                                    if let Some(removed) = peers_map.write().remove(&peer_id) {
+                                        ip_map.write().remove(&removed.virtual_ip);
+                                    }
+                                    info!("Client {} s'est déconnecté proprement du salon", peer_id);
+                                } else {
+                                    warn!(
+                                        "Tentative de Disconnect non autorisée pour peer_id={} depuis {}",
+                                        peer_id, src_endpoint
+                                    );
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     Err(e) => {
@@ -269,16 +387,14 @@ impl NetworkTunnel {
             while running_fwd.load(Ordering::Relaxed) {
                 if let Some(data) = from_adapter_rx.recv().await {
                     if data.len() >= 20 {
-                        // Décode l'IP de destination du paquet IPv4 (octets 16..20)
                         let dst_ip = Ipv4Addr::new(data[16], data[17], data[18], data[19]);
                         if dst_ip == Ipv4Addr::BROADCAST || dst_ip.octets()[3] == 255 {
-                            // Paquet Broadcast IPv4
                             let bcast_pkt = CoopPacket::BroadcastGaming {
                                 src_ip: my_vip,
                                 port: 0,
                                 payload: data,
                             }
-                            .encode();
+                            .encode_encrypted(&session_key);
 
                             let client_eps: Vec<SocketAddr> = peers_fwd
                                 .read()
@@ -305,7 +421,7 @@ impl NetworkTunnel {
                                     dst_ip,
                                     payload: data,
                                 }
-                                .encode();
+                                .encode_encrypted(&session_key);
                                 let _ = socket_tx_data.send_to(&fwd, ep).await;
                             }
                         }
@@ -329,7 +445,7 @@ impl NetworkTunnel {
                         port,
                         payload,
                     }
-                    .encode();
+                    .encode_encrypted(&session_key);
 
                     let client_eps: Vec<SocketAddr> = peers_bcast
                         .read()
@@ -362,7 +478,7 @@ impl NetworkTunnel {
                     seq,
                     timestamp_ms: now_ms,
                 }
-                .encode();
+                .encode_encrypted(&session_key);
 
                 let client_eps: Vec<SocketAddr> = peers_ping
                     .read()
@@ -380,46 +496,99 @@ impl NetworkTunnel {
         Ok(())
     }
 
-    /// Démarre en mode Client (Rejoindre un salon / Nœud distant)
+    /// Démarre en mode Client (Rejoindre un salon / Nœud distant) avec chiffrement AEAD ChaCha20-Poly1305
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_client(
         &self,
         server_addr: SocketAddr,
         player_name: String,
         room_code: String,
+        room_password: String,
         to_adapter_tx: mpsc::Sender<Vec<u8>>,
         mut from_adapter_rx: mpsc::Receiver<Vec<u8>>,
         to_bcast_tx: mpsc::Sender<(u16, Vec<u8>)>,
         mut from_bcast_rx: mpsc::Receiver<(u16, Vec<u8>)>,
     ) -> Result<()> {
         *self.role.write() = NodeRole::Client;
+        *self.conn_status.write() = ConnectionStatus::Connecting;
+        *self.last_error.write() = None;
         self.running.store(true, Ordering::SeqCst);
 
-        let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
-        info!("CoopLink Client connecté via {}", socket.local_addr()?);
+        let session_key = derive_session_key(&room_code, &room_password);
+        let auth_tag = compute_handshake_auth_tag(&room_code, &room_password, &player_name);
+        let auth_hex = hex_encode(&auth_tag);
 
-        // Envoi du Handshake Request
+        let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
+        info!("CoopLink Client AEAD initialisé sur {}", socket.local_addr()?);
+
+        // Envoi du Handshake Request chiffré AEAD
         let req = CoopPacket::HandshakeRequest {
             player_name: player_name.clone(),
-            room_code: room_code.clone(),
+            room_code: auth_hex.clone(),
             client_version: PROTOCOL_VERSION,
         }
-        .encode();
+        .encode_encrypted(&session_key);
         socket.send_to(&req, server_addr).await?;
+
+        // Tâche de relance du Handshake si perte UDP et gestion du timeout (passe en Error si pas de réponse)
+        let running_retry = self.running.clone();
+        let status_retry = self.conn_status.clone();
+        let err_retry = self.last_error.clone();
+        let sock_retry = socket.clone();
+        let player_retry = player_name.clone();
+        let auth_retry = auth_hex.clone();
+
+        tokio::spawn(async move {
+            for attempt in 1..=3 {
+                tokio::time::sleep(Duration::from_millis(1800)).await;
+                if !running_retry.load(Ordering::Relaxed) {
+                    return;
+                }
+                if *status_retry.read() != ConnectionStatus::Connecting {
+                    return;
+                }
+                if attempt < 3 {
+                    let retry_pkt = CoopPacket::HandshakeRequest {
+                        player_name: player_retry.clone(),
+                        room_code: auth_retry.clone(),
+                        client_version: PROTOCOL_VERSION,
+                    }
+                    .encode_encrypted(&session_key);
+                    let _ = sock_retry.send_to(&retry_pkt, server_addr).await;
+                } else {
+                    *status_retry.write() = ConnectionStatus::Error;
+                    *err_retry.write() = Some(
+                        "Délai d'attente dépassé ou code/mot de passe de salon incorrect.".to_string(),
+                    );
+                }
+            }
+        });
 
         let running_flag = self.running.clone();
         let socket_rx = socket.clone();
         let peers_map = self.peers.clone();
         let my_vip_holder = self.my_virtual_ip.clone();
+        let conn_status_holder = self.conn_status.clone();
+        let last_err_holder = self.last_error.clone();
         let rx_counter = self.bytes_rx.clone();
 
-        // Tâche de réception client
+        // Tâche de réception client (vérifie strictement src_endpoint == server_addr + AEAD)
         tokio::spawn(async move {
             let mut buf = vec![0u8; 65535];
             while running_flag.load(Ordering::Relaxed) {
                 match socket_rx.recv_from(&mut buf).await {
                     Ok((len, src_endpoint)) => {
+                        // Sécurité Client : Ignore tout paquet ne provenant pas de l'adresse du serveur hôte
+                        if src_endpoint != server_addr {
+                            debug!(
+                                "Paquet ignoré depuis une source tierce non autorisée: {} (attendu: {})",
+                                src_endpoint, server_addr
+                            );
+                            continue;
+                        }
+
                         rx_counter.fetch_add(len as u64, Ordering::Relaxed);
-                        if let Ok(packet) = CoopPacket::decode(&buf[..len]) {
+                        if let Ok(packet) = CoopPacket::decode_encrypted(&buf[..len], &session_key) {
                             match packet {
                                 CoopPacket::HandshakeResponse {
                                     success,
@@ -430,6 +599,8 @@ impl NetworkTunnel {
                                 } => {
                                     if success {
                                         *my_vip_holder.write() = Some(assigned_ip);
+                                        *conn_status_holder.write() = ConnectionStatus::Connected;
+                                        *last_err_holder.write() = None;
                                         info!(
                                             "Salon rejoint avec succès ! IP Virtuelle attribuée: {} par l'Hôte {}",
                                             assigned_ip, host_name
@@ -444,7 +615,7 @@ impl NetworkTunnel {
                                                 1,
                                             ),
                                             endpoint: src_endpoint,
-                                            ping_ms: 20,
+                                            ping_ms: 15,
                                             last_seen_secs: current_timestamp_secs(),
                                             is_host: true,
                                             bytes_sent: 0,
@@ -452,11 +623,14 @@ impl NetworkTunnel {
                                         };
                                         peers_map.write().insert(1, host_peer);
                                     } else {
+                                        *conn_status_holder.write() = ConnectionStatus::Error;
+                                        *last_err_holder.write() = Some(error_msg.clone());
                                         error!("Échec de connexion au salon: {}", error_msg);
                                     }
                                 }
                                 CoopPacket::Ping { seq, timestamp_ms } => {
-                                    let pong = CoopPacket::Pong { seq, timestamp_ms }.encode();
+                                    let pong = CoopPacket::Pong { seq, timestamp_ms }
+                                        .encode_encrypted(&session_key);
                                     let _ = socket_rx.send_to(&pong, src_endpoint).await;
                                 }
                                 CoopPacket::Pong { timestamp_ms, .. } => {
@@ -513,7 +687,7 @@ impl NetworkTunnel {
                             dst_ip,
                             payload: data,
                         }
-                        .encode();
+                        .encode_encrypted(&session_key);
                         let _ = socket_fwd.send_to(&pkt, server_addr).await;
                     }
                 } else {
@@ -537,7 +711,7 @@ impl NetworkTunnel {
                             port,
                             payload,
                         }
-                        .encode();
+                        .encode_encrypted(&session_key);
                         let _ = socket_bcast.send_to(&pkt, server_addr).await;
                     }
                 } else {
@@ -546,22 +720,25 @@ impl NetworkTunnel {
             }
         });
 
-        // Ping périodique client -> serveur
+        // Ping périodique client -> serveur (uniquement une fois connecté)
         let running_ping = self.running.clone();
+        let status_ping = self.conn_status.clone();
         let socket_ping = socket.clone();
 
         tokio::spawn(async move {
             let mut seq = 0u32;
             while running_ping.load(Ordering::Relaxed) {
                 tokio::time::sleep(Duration::from_millis(1500)).await;
-                seq = seq.wrapping_add(1);
-                let now_ms = current_timestamp_ms();
-                let ping_pkt = CoopPacket::Ping {
-                    seq,
-                    timestamp_ms: now_ms,
+                if *status_ping.read() == ConnectionStatus::Connected {
+                    seq = seq.wrapping_add(1);
+                    let now_ms = current_timestamp_ms();
+                    let ping_pkt = CoopPacket::Ping {
+                        seq,
+                        timestamp_ms: now_ms,
+                    }
+                    .encode_encrypted(&session_key);
+                    let _ = socket_ping.send_to(&ping_pkt, server_addr).await;
                 }
-                .encode();
-                let _ = socket_ping.send_to(&ping_pkt, server_addr).await;
             }
         });
 
@@ -571,11 +748,22 @@ impl NetworkTunnel {
     pub fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
         *self.role.write() = NodeRole::Idle;
+        *self.conn_status.write() = ConnectionStatus::Disconnected;
+        *self.last_error.write() = None;
         *self.my_virtual_ip.write() = None;
         self.peers.write().clear();
         self.endpoint_to_id.write().clear();
         self.ip_to_id.write().clear();
     }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write;
+        let _ = write!(&mut s, "{:02x}", b);
+    }
+    s
 }
 
 fn current_timestamp_ms() -> u64 {

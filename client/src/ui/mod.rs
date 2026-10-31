@@ -2,7 +2,7 @@ pub mod logo;
 pub mod retro_theme;
 pub mod views;
 
-use crate::adapter::NativeAdapter;
+use crate::adapter::{NativeAdapter, VirtualAdapter};
 use crate::config::AppConfig;
 use crate::i18n::{I18n, Language};
 use crate::network::broadcast_relay::BroadcastRelay;
@@ -60,10 +60,13 @@ pub struct CoopLinkApp {
     pub speedtest_mgr: SpeedtestManager,
     pub adapter: NativeAdapter,
     pub to_adapter_tx: mpsc::Sender<Vec<u8>>,
+    #[allow(dead_code)]
     pub from_net_rx: Option<mpsc::Receiver<Vec<u8>>>,
     pub to_bcast_tx: mpsc::Sender<(u16, Vec<u8>)>,
+    #[allow(dead_code)]
     pub from_bcast_rx: Option<mpsc::Receiver<(u16, Vec<u8>)>>,
     pub to_tunnel_bcast_tx: mpsc::Sender<(u16, Vec<u8>)>,
+    #[allow(dead_code)]
     pub from_tunnel_bcast_rx: Option<mpsc::Receiver<(u16, Vec<u8>)>>,
     pub logo_texture: Option<TextureHandle>,
     pub interfaces_rx: Option<crossbeam_channel::Receiver<Vec<InterfaceMetricInfo>>>,
@@ -329,7 +332,47 @@ impl eframe::App for CoopLinkApp {
         self.state.total_bytes_rx = self.tunnel.bytes_rx.load(Ordering::Relaxed);
         self.state.broadcast_packets_relayed = self.broadcast_relay.relayed_count();
 
+        let prev_vip = self.state.virtual_ip;
+        let prev_status = self.state.status;
         self.state.virtual_ip = *self.tunnel.my_virtual_ip.read();
+        if self.state.role != NodeRole::Idle {
+            self.state.status = *self.tunnel.conn_status.read();
+        }
+
+        // Dès que le client reçoit son IP virtuelle après validation du HandshakeResponse par l'Hôte
+        if prev_vip.is_none() {
+            if let Some(vip) = self.state.virtual_ip {
+                if self.state.role == NodeRole::Client {
+                    let adapter_name = self.state.adapter_name.clone();
+                    let metric = self.config.target_metric;
+                    let mtu = self.config.mtu;
+                    let _ = self.adapter.initialize(
+                        &adapter_name,
+                        vip,
+                        Ipv4Addr::new(255, 255, 255, 0),
+                        metric,
+                        mtu,
+                    );
+                    self.add_log(
+                        LogLevel::Success,
+                        &format!(
+                            "Handshake AEAD validé ! IP virtuelle attribuée : {} — Connexion directe P2P établie.",
+                            vip
+                        ),
+                    );
+                }
+            }
+        }
+        if prev_status == ConnectionStatus::Connecting && self.state.status == ConnectionStatus::Error {
+            let err_msg = self
+                .tunnel
+                .last_error
+                .read()
+                .clone()
+                .unwrap_or_else(|| "Échec d'authentification ou hôte injoignable.".to_string());
+            self.add_log(LogLevel::Error, &format!("Connexion refusée : {}", err_msg));
+        }
+
         self.state.peers = self.tunnel.peers.read().values().cloned().collect();
         self.state.unique_instance_id = self.telemetry.assigned_id.read().clone();
         self.state.central_server_connected = self.telemetry.server_connected.load(Ordering::Relaxed);
@@ -717,19 +760,25 @@ impl CoopLinkApp {
         let port = self.config.listen_port;
         let player_name = self.config.player_name.clone();
         let room_code = self.state.room_code.trim().to_string();
-        let auth_token = if self.config.room_password.trim().is_empty() {
-            room_code.clone()
-        } else {
-            format!("{}#{}", room_code, self.config.room_password.trim())
-        };
+        let room_password = self.config.room_password.trim().to_string();
         let host_ip = self.config.host_virtual_ip;
 
         self.add_log(
             LogLevel::Game,
-            &format!("Création du salon '{}' (Port UDP P2P {})...", room_code, port),
+            &format!(
+                "Création du salon chiffré AEAD '{}' (Port UDP P2P {})...",
+                room_code, port
+            ),
         );
 
-        let (adapter, to_adapter_tx, from_adapter) = NativeAdapter::new();
+        let (mut adapter, to_adapter_tx, from_adapter) = NativeAdapter::new();
+        let _ = adapter.initialize(
+            &self.state.adapter_name,
+            host_ip,
+            Ipv4Addr::new(255, 255, 255, 0),
+            self.config.target_metric,
+            self.config.mtu,
+        );
         let (to_bcast_tx, from_bcast_net) = mpsc::channel(1000);
         let (to_tunnel_bcast_tx, from_bcast) = mpsc::channel(1000);
         self.adapter = adapter;
@@ -746,7 +795,8 @@ impl CoopLinkApp {
                 .start_host(
                     port,
                     player_name,
-                    auth_token,
+                    room_code,
+                    room_password,
                     host_ip,
                     to_adapter_tx,
                     from_adapter,
@@ -764,7 +814,7 @@ impl CoopLinkApp {
         self.add_log(
             LogLevel::Success,
             &format!(
-                "Salon hébergé actif sur {} (0% charge CPU en veille — prêt pour les jeux LAN et le partage de jeu Co-op).",
+                "Salon hébergé actif sur {} (Chiffrement ChaCha20-Poly1305 actif, 0% charge CPU en veille).",
                 host_ip
             ),
         );
@@ -798,15 +848,14 @@ impl CoopLinkApp {
         self.state.role = NodeRole::Client;
         let player_name = self.config.player_name.clone();
         let room_code = self.state.room_code.trim().to_string();
-        let auth_token = if self.config.room_password.trim().is_empty() {
-            room_code.clone()
-        } else {
-            format!("{}#{}", room_code, self.config.room_password.trim())
-        };
+        let room_password = self.config.room_password.trim().to_string();
 
         self.add_log(
             LogLevel::Info,
-            &format!("Connexion P2P au salon '{}' ({})...", room_code, server_addr),
+            &format!(
+                "Négociation Handshake AEAD avec le salon '{}' ({})...",
+                room_code, server_addr
+            ),
         );
 
         let (adapter, to_adapter_tx, from_adapter) = NativeAdapter::new();
@@ -827,7 +876,8 @@ impl CoopLinkApp {
                 .start_client(
                     server_addr,
                     player_name,
-                    auth_token,
+                    room_code,
+                    room_password,
                     to_adapter_tx,
                     from_adapter,
                     to_bcast_tx,
@@ -840,17 +890,13 @@ impl CoopLinkApp {
         });
 
         self.apply_low_metric();
-        self.state.status = ConnectionStatus::Connected;
         self.sync_telemetry();
-        self.add_log(
-            LogLevel::Success,
-            "Connexion directe P2P établie ! Vous pouvez lancer votre jeu LAN ou rejoindre le jeu partagé.",
-        );
     }
 
     fn disconnect_node(&mut self) {
         self.tunnel.stop();
         self.broadcast_relay.stop();
+        let _ = self.adapter.shutdown();
         self.streaming_engine.capture_host.stop_daemon();
         self.streaming_engine.stream_viewer.stop_stream();
         self.upnp_mgr.lock().close_port();
