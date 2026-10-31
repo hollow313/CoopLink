@@ -50,16 +50,9 @@ impl NetworkView {
                             ui.add(egui::Slider::new(&mut config.target_metric, 1..=50).text(""));
 
                             if config.target_metric <= 10 {
-                                ui.label(
-                                    RichText::new("✔ Priorité maximale (passe avant la box)")
-                                        .color(ModernTheme::GREEN_VIVID)
-                                        .strong(),
-                                );
+                                ModernTheme::status_pill(ui, ModernTheme::GREEN_VIVID, "Priorité maximale (passe avant la box)");
                             } else {
-                                ui.label(
-                                    RichText::new("⚠ Valeur élevée (risque de passer après le Wi-Fi)")
-                                        .color(ModernTheme::ORANGE_CORAL),
-                                );
+                                ModernTheme::status_pill(ui, ModernTheme::ORANGE_CORAL, "Valeur élevée (risque de passer après le Wi-Fi)");
                             }
                         });
 
@@ -79,11 +72,7 @@ impl NetworkView {
                             }
 
                             if state.metric_applied {
-                                ui.label(
-                                    RichText::new("✔ Métrique prioritaire active sur le système")
-                                        .color(ModernTheme::GREEN_VIVID)
-                                        .strong(),
-                                );
+                                ModernTheme::status_pill(ui, ModernTheme::GREEN_VIVID, "Métrique prioritaire active");
                             }
                         });
                     });

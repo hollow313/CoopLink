@@ -32,7 +32,7 @@ impl FirewallView {
                         ui.label(
                             RichText::new(
                                 "CoopLink configure automatiquement les règles d'autorisation dans le pare-feu Windows \
-                                 afin d'autoriser le maillage P2P (10.244.0.0/24) et le streaming Sunshine/Moonlight sans coupure.",
+                                 afin d'autoriser le maillage P2P (10.244.0.0/24) et le partage d'écran coopératif sans coupure.",
                             )
                             .color(ModernTheme::TEXT_SECONDARY),
                         );
@@ -47,17 +47,9 @@ impl FirewallView {
                             );
 
                             if state.firewall_ok {
-                                ui.label(
-                                    RichText::new("✔ Configuré et opérationnel")
-                                        .color(ModernTheme::GREEN_VIVID)
-                                        .strong(),
-                                );
+                                ModernTheme::status_pill(ui, ModernTheme::GREEN_VIVID, "Configuré et opérationnel");
                             } else {
-                                ui.label(
-                                    RichText::new("⚠ Configuration recommandée")
-                                        .color(ModernTheme::ORANGE_CORAL)
-                                        .strong(),
-                                );
+                                ModernTheme::status_pill(ui, ModernTheme::ORANGE_CORAL, "Configuration recommandée");
                             }
                         });
 
@@ -102,12 +94,12 @@ impl FirewallView {
                         render_rule_item(
                             ui,
                             &format!("CoopLink — Sous-réseau Virtuel ({}.0/24)", config.virtual_subnet_prefix),
-                            "Autorise le trafic LAN et le flux Sunshine/Moonlight strictement sur l'interface virtuelle.",
+                            "Autorise le trafic LAN et le partage d'écran Co-op strictement sur l'interface virtuelle.",
                         );
                         render_rule_item(
                             ui,
-                            "CoopLink — Découverte LAN & Périphériques ViGEmBus",
-                            "Autorise la découverte des salons locaux et l'injection basse latence des manettes.",
+                            "CoopLink — Découverte LAN & Manettes Multi-Joueurs",
+                            "Autorise la découverte des salons locaux et la synchronisation basse latence des manettes.",
                         );
                     });
             });
@@ -116,7 +108,7 @@ impl FirewallView {
 
 fn render_rule_item(ui: &mut Ui, title: &str, desc: &str) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new("✔").color(ModernTheme::GREEN_VIVID).strong());
+        ModernTheme::draw_dot(ui, ModernTheme::GREEN_VIVID, 4.0);
         ui.vertical(|ui| {
             ui.label(RichText::new(title).color(ModernTheme::TEXT_PRIMARY).strong());
             ui.label(RichText::new(desc).color(ModernTheme::TEXT_SECONDARY).small());

@@ -40,6 +40,7 @@ pub enum VirtualGamepadType {
     DualShock4,
 }
 
+#[allow(dead_code)]
 impl VirtualGamepadType {
     pub fn as_sunshine_str(&self) -> &'static str {
         match self {

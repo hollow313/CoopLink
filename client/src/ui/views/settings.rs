@@ -1,4 +1,5 @@
 use crate::config::AppConfig;
+use crate::i18n::Language;
 use crate::ui::retro_theme::ModernTheme;
 use egui::{Color32, RichText, Rounding, Stroke, Ui};
 
@@ -16,7 +17,7 @@ impl SettingsView {
                     .rounding(Rounding::same(10.0))
                     .show(ui, |ui| {
                         ui.label(
-                            RichText::new("Paramètres de l'application")
+                            RichText::new("Paramètres de l'application & Langue")
                                 .color(ModernTheme::BLUE_ELECTRIC)
                                 .strong()
                                 .size(16.5),
@@ -24,7 +25,7 @@ impl SettingsView {
                         ui.add_space(4.0);
                         ui.label(
                             RichText::new(
-                                "Personnalisez le comportement réseau, la découverte P2P et les automatisations Windows.",
+                                "Personnalisez la langue, le serveur de métriques (attribution d'ID unique) et les automatisations Windows.",
                             )
                             .color(ModernTheme::TEXT_SECONDARY),
                         );
@@ -35,8 +36,26 @@ impl SettingsView {
                             .num_columns(2)
                             .spacing([24.0, 12.0])
                             .show(ui, |ui| {
+                                ui.label(RichText::new("Langue de l'interface :").color(ModernTheme::TEXT_PRIMARY).strong());
+                                egui::ComboBox::from_id_salt("settings_lang_combo")
+                                    .selected_text(format!("{} ({})", config.language.display_name(), config.language.code()))
+                                    .show_ui(ui, |ui| {
+                                        for &lang in Language::all() {
+                                            ui.selectable_value(
+                                                &mut config.language,
+                                                lang,
+                                                format!("{} ({})", lang.display_name(), lang.code()),
+                                            );
+                                        }
+                                    });
+                                ui.end_row();
+
                                 ui.label(RichText::new("Pseudo par défaut :").color(ModernTheme::TEXT_PRIMARY).strong());
                                 ui.text_edit_singleline(&mut config.player_name);
+                                ui.end_row();
+
+                                ui.label(RichText::new("Serveur Central (ID & Métriques 30024) :").color(ModernTheme::TEXT_PRIMARY).strong());
+                                ui.text_edit_singleline(&mut config.central_server_address);
                                 ui.end_row();
 
                                 ui.label(RichText::new("Port UDP P2P :").color(ModernTheme::TEXT_PRIMARY).strong());
@@ -103,11 +122,7 @@ impl SettingsView {
                             }
 
                             if *saved_notice {
-                                ui.label(
-                                    RichText::new("✔ Paramètres enregistrés")
-                                        .color(ModernTheme::GREEN_VIVID)
-                                        .strong(),
-                                );
+                                ModernTheme::status_pill(ui, ModernTheme::GREEN_VIVID, "Paramètres enregistrés");
                             }
                         });
                     });

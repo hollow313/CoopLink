@@ -6,6 +6,7 @@
 
 mod adapter;
 mod config;
+mod i18n;
 mod network;
 mod platform;
 mod streaming;

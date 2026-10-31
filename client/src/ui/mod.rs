@@ -4,7 +4,9 @@ pub mod views;
 
 use crate::adapter::windows::WindowsVirtualAdapter;
 use crate::config::AppConfig;
+use crate::i18n::{I18n, Language};
 use crate::network::broadcast_relay::BroadcastRelay;
+use crate::network::telemetry::CentralTelemetryClient;
 use crate::network::tunnel::NetworkTunnel;
 use crate::network::upnp::{UpnpManager, UpnpState};
 use crate::platform::windows::firewall::{check_firewall_status, setup_firewall_rules};
@@ -18,6 +20,7 @@ use logo::load_embedded_logo;
 use parking_lot::Mutex;
 use retro_theme::ModernTheme;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
@@ -48,6 +51,7 @@ pub struct CoopLinkApp {
     pub tunnel: Arc<NetworkTunnel>,
     pub broadcast_relay: Arc<BroadcastRelay>,
     pub upnp_mgr: Arc<Mutex<UpnpManager>>,
+    pub telemetry: Arc<CentralTelemetryClient>,
     pub streaming_engine: StreamingEngine,
     pub to_adapter_tx: mpsc::Sender<Vec<u8>>,
     pub from_net_rx: Option<mpsc::Receiver<Vec<u8>>>,
@@ -74,6 +78,24 @@ impl CoopLinkApp {
         let upnp_mgr = Arc::new(Mutex::new(UpnpManager::new()));
         let streaming_engine = StreamingEngine::new(config.host_virtual_ip);
 
+        // Client de télémétrie & d'attribution d'ID unique auprès du container central (UDP 30024)
+        let telemetry = CentralTelemetryClient::new(
+            config.instance_uuid,
+            config.player_name.clone(),
+            config.central_server_address.clone(),
+        );
+        telemetry.update_state(
+            &config.player_name,
+            false,
+            false,
+            &state.room_code,
+            0,
+            false,
+            &config.central_server_address,
+            &config.remote_server_address,
+        );
+        telemetry.start_background_loop(&rt);
+
         state.firewall_ok = check_firewall_status();
         let logo_texture = load_embedded_logo(&cc.egui_ctx);
 
@@ -87,6 +109,7 @@ impl CoopLinkApp {
             tunnel,
             broadcast_relay,
             upnp_mgr,
+            telemetry,
             streaming_engine,
             to_adapter_tx,
             from_net_rx: Some(from_net_rx),
@@ -101,7 +124,7 @@ impl CoopLinkApp {
         app.trigger_refresh_interfaces();
         app.add_log(
             LogLevel::Success,
-            "CoopLink prêt (Architecture P2P directe & Streaming Sunshine/Moonlight intégrés).",
+            "CoopLink prêt (Architecture P2P directe & Partage d'Écran Coopératif actifs).",
         );
 
         if app.config.auto_firewall_rule && !app.state.firewall_ok {
@@ -137,6 +160,26 @@ impl CoopLinkApp {
             self.logs.remove(0);
         }
     }
+
+    fn sync_telemetry(&self) {
+        let tunnel_mounted = matches!(
+            self.state.status,
+            ConnectionStatus::Hosting | ConnectionStatus::Connected
+        );
+        let is_host = self.state.role == NodeRole::Host;
+        let screen_sharing =
+            self.streaming_engine.sunshine_host.is_running || self.streaming_engine.moonlight_client.is_streaming;
+        self.telemetry.update_state(
+            &self.config.player_name,
+            tunnel_mounted,
+            is_host,
+            &self.state.room_code,
+            self.state.peers.len(),
+            screen_sharing,
+            &self.config.central_server_address,
+            &self.config.remote_server_address,
+        );
+    }
 }
 
 impl eframe::App for CoopLinkApp {
@@ -149,12 +192,15 @@ impl eframe::App for CoopLinkApp {
             }
         }
 
-        self.state.total_bytes_tx = self.tunnel.bytes_tx.load(std::sync::atomic::Ordering::Relaxed);
-        self.state.total_bytes_rx = self.tunnel.bytes_rx.load(std::sync::atomic::Ordering::Relaxed);
+        self.state.total_bytes_tx = self.tunnel.bytes_tx.load(Ordering::Relaxed);
+        self.state.total_bytes_rx = self.tunnel.bytes_rx.load(Ordering::Relaxed);
         self.state.broadcast_packets_relayed = self.broadcast_relay.relayed_count();
 
         self.state.virtual_ip = *self.tunnel.my_virtual_ip.read();
         self.state.peers = self.tunnel.peers.read().values().cloned().collect();
+        self.state.unique_instance_id = self.telemetry.assigned_id.read().clone();
+        self.state.central_server_connected = self.telemetry.server_connected.load(Ordering::Relaxed);
+        self.sync_telemetry();
 
         match self.upnp_mgr.lock().state().clone() {
             UpnpState::Active {
@@ -175,6 +221,8 @@ impl eframe::App for CoopLinkApp {
                 self.state.upnp_status_text = "Inactif".to_string();
             }
         }
+
+        let lang = self.config.language;
 
         // En-tête Moderne Windows 11 Fluent (Blanc épuré assorti à l'icône CoopLink.png)
         egui::TopBottomPanel::top("top_panel")
@@ -199,7 +247,7 @@ impl eframe::App for CoopLinkApp {
                                     .size(20.0),
                             );
                             ui.label(
-                                RichText::new("Réseau Virtuel P2P & Streaming Coopératif")
+                                RichText::new(I18n::app_subtitle(lang))
                                     .color(ModernTheme::BLUE_ELECTRIC)
                                     .size(13.5),
                             );
@@ -207,16 +255,68 @@ impl eframe::App for CoopLinkApp {
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let (dot_color, status_label) = match self.state.status {
-                            ConnectionStatus::Hosting => (ModernTheme::GREEN_VIVID, "Salon Hôte Actif"),
-                            ConnectionStatus::Connected => (ModernTheme::BLUE_ELECTRIC, "Connecté en P2P"),
-                            ConnectionStatus::Connecting => (ModernTheme::ORANGE_CORAL, "Connexion..."),
-                            ConnectionStatus::Disconnected => (ModernTheme::TEXT_MUTED, "Prêt"),
-                            ConnectionStatus::Error => (ModernTheme::RED_ERROR, "Erreur réseau"),
-                        };
+                        // Sélecteur de langue international (FR / EN / ES / DE / PT)
+                        let prev_lang = self.config.language;
+                        egui::ComboBox::from_id_salt("header_lang_selector")
+                            .selected_text(
+                                RichText::new(self.config.language.code())
+                                    .color(ModernTheme::BLUE_ELECTRIC)
+                                    .strong(),
+                            )
+                            .width(56.0)
+                            .show_ui(ui, |ui| {
+                                for &l in Language::all() {
+                                    ui.selectable_value(
+                                        &mut self.config.language,
+                                        l,
+                                        format!("{} — {}", l.code(), l.display_name()),
+                                    );
+                                }
+                            });
+                        if self.config.language != prev_lang {
+                            let _ = self.config.save();
+                        }
 
-                        ui.label(RichText::new(status_label).color(dot_color).strong());
-                        ui.label(RichText::new("●").color(dot_color).size(14.0));
+                        ui.add_space(6.0);
+
+                        // Pastille verte "Prêt" (ou statut actif) dessinée en vectoriel pur (jamais de carré ☐)
+                        let (pill_color, status_label) = match self.state.status {
+                            ConnectionStatus::Hosting => (ModernTheme::GREEN_VIVID, I18n::status_hosting(lang)),
+                            ConnectionStatus::Connected => (ModernTheme::GREEN_VIVID, I18n::status_connected(lang)),
+                            ConnectionStatus::Connecting => (ModernTheme::ORANGE_CORAL, I18n::status_connecting(lang)),
+                            ConnectionStatus::Disconnected => (ModernTheme::GREEN_VIVID, I18n::status_ready(lang)),
+                            ConnectionStatus::Error => (ModernTheme::RED_ERROR, I18n::status_error(lang)),
+                        };
+                        ModernTheme::status_pill(ui, pill_color, status_label);
+
+                        ui.add_space(6.0);
+
+                        // Badge ID Unique d'instance attribué
+                        egui::Frame::none()
+                            .fill(ModernTheme::SUBTLE_BG)
+                            .rounding(egui::Rounding::same(20.0))
+                            .inner_margin(egui::Margin::symmetric(10.0, 5.0))
+                            .stroke(egui::Stroke::new(1.0_f32, ModernTheme::BORDER_SUBTLE))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 5.0;
+                                    ModernTheme::draw_dot(
+                                        ui,
+                                        if self.state.central_server_connected {
+                                            ModernTheme::CYAN_VIBRANT
+                                        } else {
+                                            ModernTheme::BLUE_ELECTRIC
+                                        },
+                                        3.8,
+                                    );
+                                    ui.label(
+                                        RichText::new(format!("ID : {}", self.state.unique_instance_id))
+                                            .color(ModernTheme::TEXT_SECONDARY)
+                                            .strong()
+                                            .size(12.5),
+                                    );
+                                });
+                            });
                     });
                 });
 
@@ -224,22 +324,22 @@ impl eframe::App for CoopLinkApp {
 
                 // Barre de navigation moderne style Windows 11
                 ui.horizontal(|ui| {
-                    tab_button(ui, &mut self.active_tab, ActiveTab::Lobby, "Salons & Réseau P2P");
+                    tab_button(ui, &mut self.active_tab, ActiveTab::Lobby, I18n::tab_lobby(lang));
                     tab_button(
                         ui,
                         &mut self.active_tab,
                         ActiveTab::Streaming,
-                        "Streaming & Manettes",
+                        I18n::tab_streaming(lang),
                     );
                     tab_button(
                         ui,
                         &mut self.active_tab,
                         ActiveTab::Network,
-                        "Priorité & Cartes",
+                        I18n::tab_network(lang),
                     );
-                    tab_button(ui, &mut self.active_tab, ActiveTab::Firewall, "Pare-feu");
-                    tab_button(ui, &mut self.active_tab, ActiveTab::Settings, "Paramètres");
-                    tab_button(ui, &mut self.active_tab, ActiveTab::Console, "Activité");
+                    tab_button(ui, &mut self.active_tab, ActiveTab::Firewall, I18n::tab_firewall(lang));
+                    tab_button(ui, &mut self.active_tab, ActiveTab::Settings, I18n::tab_settings(lang));
+                    tab_button(ui, &mut self.active_tab, ActiveTab::Console, I18n::tab_console(lang));
                 });
             });
 
@@ -254,10 +354,10 @@ impl eframe::App for CoopLinkApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(format!(
-                            "Trafic P2P Direct — Envoyé : {:.2} Ko | Reçu : {:.2} Ko",
+                        RichText::new(I18n::footer_traffic(
+                            lang,
                             self.state.total_bytes_tx as f64 / 1024.0,
-                            self.state.total_bytes_rx as f64 / 1024.0
+                            self.state.total_bytes_rx as f64 / 1024.0,
                         ))
                         .color(ModernTheme::TEXT_SECONDARY)
                         .small(),
@@ -265,7 +365,7 @@ impl eframe::App for CoopLinkApp {
 
                     ui.add_space(16.0);
                     ui.label(
-                        RichText::new(format!("Participants : {}", self.state.peers.len()))
+                        RichText::new(I18n::footer_peers(lang, self.state.peers.len()))
                             .color(ModernTheme::BLUE_ELECTRIC)
                             .strong()
                             .small(),
@@ -296,10 +396,10 @@ impl eframe::App for CoopLinkApp {
                 let mut on_refresh_interfaces_clicked = false;
                 let mut on_repair_firewall_clicked = false;
                 let mut on_clear_console_clicked = false;
-                let mut on_start_sunshine_host = false;
-                let mut on_stop_sunshine_host = false;
-                let mut on_start_moonlight_client = false;
-                let mut on_stop_moonlight_client = false;
+                let mut on_start_host_stream = false;
+                let mut on_stop_host_stream = false;
+                let mut on_start_client_stream = false;
+                let mut on_stop_client_stream = false;
 
                 match self.active_tab {
                     ActiveTab::Lobby => {
@@ -316,12 +416,13 @@ impl eframe::App for CoopLinkApp {
                     ActiveTab::Streaming => {
                         StreamingView::render(
                             ui,
+                            lang,
                             &self.state,
                             &mut self.streaming_engine,
-                            &mut on_start_sunshine_host,
-                            &mut on_stop_sunshine_host,
-                            &mut on_start_moonlight_client,
-                            &mut on_stop_moonlight_client,
+                            &mut on_start_host_stream,
+                            &mut on_stop_host_stream,
+                            &mut on_start_client_stream,
+                            &mut on_stop_client_stream,
                         );
                     }
                     ActiveTab::Network => {
@@ -370,23 +471,24 @@ impl eframe::App for CoopLinkApp {
                 if on_clear_console_clicked {
                     self.logs.clear();
                 }
-                if on_start_sunshine_host {
+                if on_start_host_stream {
                     let vip = self.state.virtual_ip.unwrap_or(self.config.host_virtual_ip);
                     let _ = self.streaming_engine.sunshine_host.start_daemon(vip);
                     self.add_log(
                         LogLevel::Game,
                         &format!(
-                            "Serveur Sunshine démarré et lié exclusivement à l'IP virtuelle {} (Encodeur: {}).",
+                            "Partage d'écran CoopLink démarré sur l'interface virtuelle {} (Source : '{}', Encodeur : {}).",
                             vip,
+                            self.streaming_engine.selected_app_name,
                             self.streaming_engine.sunshine_host.active_encoder.display_name()
                         ),
                     );
                 }
-                if on_stop_sunshine_host {
+                if on_stop_host_stream {
                     self.streaming_engine.sunshine_host.stop_daemon();
-                    self.add_log(LogLevel::Warning, "Partage d'écran Sunshine arrêté.");
+                    self.add_log(LogLevel::Warning, "Partage d'écran CoopLink arrêté.");
                 }
-                if on_start_moonlight_client {
+                if on_start_client_stream {
                     let host_vip = self.streaming_engine.moonlight_client.target_host_vip;
                     let my_vip = self.state.virtual_ip.unwrap_or(Ipv4Addr::new(10, 244, 0, 2));
                     let req = self.streaming_engine.pairing.build_pair_request(
@@ -413,14 +515,14 @@ impl eframe::App for CoopLinkApp {
                     self.add_log(
                         LogLevel::Success,
                         &format!(
-                            "Jumelage Zero-Config réussi & Flux Moonlight démarré vers {} (Assigné: Joueur {}).",
+                            "Connexion automatique réussie & Écran partagé ouvert vers {} (Assigné : Joueur {}).",
                             host_vip, slot
                         ),
                     );
                 }
-                if on_stop_moonlight_client {
+                if on_stop_client_stream {
                     self.streaming_engine.moonlight_client.stop_stream();
-                    self.add_log(LogLevel::Info, "Flux Moonlight fermé.");
+                    self.add_log(LogLevel::Info, "Session d'écran partagé fermée.");
                 }
             });
 
@@ -471,14 +573,14 @@ impl CoopLinkApp {
             }
         });
 
-        // Démarre automatiquement le service Sunshine lié à l'IP virtuelle de l'hôte
         let _ = self.streaming_engine.sunshine_host.start_daemon(host_ip);
 
         self.apply_low_metric();
+        self.sync_telemetry();
         self.add_log(
             LogLevel::Success,
             &format!(
-                "Salon hébergé actif sur {} (Sunshine prêt pour le jumelage Zero-Config).",
+                "Salon hébergé actif sur {} (Prêt pour les jeux LAN et le partage d'écran Co-op).",
                 host_ip
             ),
         );
@@ -549,9 +651,10 @@ impl CoopLinkApp {
 
         self.apply_low_metric();
         self.state.status = ConnectionStatus::Connected;
+        self.sync_telemetry();
         self.add_log(
             LogLevel::Success,
-            "Connexion directe P2P établie ! Vous pouvez lancer le streaming ou votre jeu.",
+            "Connexion directe P2P établie ! Vous pouvez lancer votre jeu LAN ou rejoindre l'écran partagé.",
         );
     }
 
@@ -566,6 +669,7 @@ impl CoopLinkApp {
         self.state.role = NodeRole::Idle;
         self.state.virtual_ip = None;
         self.state.peers.clear();
+        self.sync_telemetry();
         self.add_log(LogLevel::Warning, "Session fermée.");
     }
 

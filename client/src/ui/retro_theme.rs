@@ -94,6 +94,36 @@ impl ModernTheme {
 
         ctx.set_style(style);
     }
+
+    /// Dessine une vraie pastille vectorielle circulaire (avec léger halo lumineux), sans dépendre de caractères Unicode
+    pub fn draw_dot(ui: &mut egui::Ui, color: Color32, radius: f32) {
+        let size = egui::vec2(radius * 2.8, radius * 2.8);
+        let (rect, _response) = ui.allocate_exact_size(size, egui::Sense::hover());
+        if ui.is_rect_visible(rect) {
+            let center = rect.center();
+            let halo = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 48);
+            ui.painter().circle_filled(center, radius * 1.45, halo);
+            ui.painter().circle_filled(center, radius, color);
+        }
+    }
+
+    /// Affiche une pastille de statut moderne (ex: Pastille verte "Prêt")
+    pub fn status_pill(ui: &mut egui::Ui, color: Color32, text: &str) {
+        let bg = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 22);
+        let border = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 95);
+        egui::Frame::none()
+            .fill(bg)
+            .rounding(Rounding::same(20.0))
+            .inner_margin(egui::Margin::symmetric(12.0, 5.0))
+            .stroke(Stroke::new(1.0_f32, border))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    Self::draw_dot(ui, color, 4.5);
+                    ui.label(egui::RichText::new(text).color(color).strong().size(13.0));
+                });
+            });
+    }
 }
 
 #[allow(dead_code)]

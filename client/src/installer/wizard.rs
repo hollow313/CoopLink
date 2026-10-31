@@ -10,15 +10,56 @@ use std::thread;
 use std::time::Duration;
 
 // Palette Windows 11 Fluent & Couleurs de l'icône CoopLink.png
-const WIN11_BG: Color32 = Color32::from_rgb(244, 247, 251);       // #F4F7FB
-const WIN11_CARD: Color32 = Color32::from_rgb(255, 255, 255);     // #FFFFFF
-const WIN11_SUBTLE: Color32 = Color32::from_rgb(248, 250, 252);   // #F8FAFC
-const WIN11_BORDER: Color32 = Color32::from_rgb(226, 232, 240);   // #E2E8F0
-const WIN11_BLUE: Color32 = Color32::from_rgb(0, 102, 255);       // #0066FF
-const WIN11_GREEN: Color32 = Color32::from_rgb(0, 186, 136);      // #00BA88
-const WIN11_TEXT_MAIN: Color32 = Color32::from_rgb(15, 23, 42);   // #0F172A
-const WIN11_TEXT_SUB: Color32 = Color32::from_rgb(71, 85, 105);   // #475569
+const WIN11_BG: Color32 = Color32::from_rgb(244, 247, 251);         // #F4F7FB
+const WIN11_CARD: Color32 = Color32::from_rgb(255, 255, 255);       // #FFFFFF
+const WIN11_SUBTLE: Color32 = Color32::from_rgb(248, 250, 252);     // #F8FAFC
+const WIN11_BORDER: Color32 = Color32::from_rgb(226, 232, 240);     // #E2E8F0
+const WIN11_BLUE: Color32 = Color32::from_rgb(0, 102, 255);         // #0066FF
+const WIN11_GREEN: Color32 = Color32::from_rgb(0, 186, 136);        // #00BA88
+const WIN11_TEXT_MAIN: Color32 = Color32::from_rgb(15, 23, 42);     // #0F172A
+const WIN11_TEXT_SUB: Color32 = Color32::from_rgb(71, 85, 105);     // #475569
 const WIN11_TEXT_MUTED: Color32 = Color32::from_rgb(100, 116, 139); // #64748B
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallerLang {
+    Fr,
+    En,
+    Es,
+    De,
+    Pt,
+}
+
+impl InstallerLang {
+    pub fn all() -> &'static [InstallerLang] {
+        &[
+            InstallerLang::Fr,
+            InstallerLang::En,
+            InstallerLang::Es,
+            InstallerLang::De,
+            InstallerLang::Pt,
+        ]
+    }
+
+    pub fn code(&self) -> &'static str {
+        match self {
+            InstallerLang::Fr => "FR",
+            InstallerLang::En => "EN",
+            InstallerLang::Es => "ES",
+            InstallerLang::De => "DE",
+            InstallerLang::Pt => "PT",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            InstallerLang::Fr => "Français",
+            InstallerLang::En => "English",
+            InstallerLang::Es => "Español",
+            InstallerLang::De => "Deutsch",
+            InstallerLang::Pt => "Português",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallStep {
@@ -31,6 +72,7 @@ pub enum InstallStep {
 }
 
 pub struct InstallerApp {
+    lang: InstallerLang,
     step: InstallStep,
     install_dir: String,
     license_accepted: bool,
@@ -53,6 +95,7 @@ impl InstallerApp {
         let logo_texture = load_installer_logo(&cc.egui_ctx);
 
         Self {
+            lang: InstallerLang::Fr,
             step: InstallStep::Welcome,
             install_dir: default_dir.to_string_lossy().to_string(),
             license_accepted: false,
@@ -70,8 +113,21 @@ impl InstallerApp {
     }
 }
 
+fn draw_dot(ui: &mut Ui, color: Color32, radius: f32) {
+    let size = egui::vec2(radius * 2.8, radius * 2.8);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let center = rect.center();
+        let halo = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 45);
+        ui.painter().circle_filled(center, radius * 1.45, halo);
+        ui.painter().circle_filled(center, radius, color);
+    }
+}
+
 impl eframe::App for InstallerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let lang = self.lang;
+
         // En-tête Classique Moderne Windows 11 (Fond Blanc Pur)
         egui::TopBottomPanel::top("installer_header")
             .frame(
@@ -88,24 +144,77 @@ impl eframe::App for InstallerApp {
                     ui.add_space(6.0);
                     ui.vertical(|ui| {
                         ui.label(
-                            RichText::new("Installation de CoopLink")
-                                .color(WIN11_TEXT_MAIN)
-                                .strong()
-                                .size(18.0),
+                            RichText::new(match lang {
+                                InstallerLang::Fr => "Installation de CoopLink",
+                                InstallerLang::En => "CoopLink Setup",
+                                InstallerLang::Es => "Instalación de CoopLink",
+                                InstallerLang::De => "CoopLink Installation",
+                                InstallerLang::Pt => "Instalação do CoopLink",
+                            })
+                            .color(WIN11_TEXT_MAIN)
+                            .strong()
+                            .size(18.0),
                         );
                         let step_subtitle = match self.step {
-                            InstallStep::Welcome => "Étape 1 sur 5 — Bienvenue dans l'assistant d'installation Windows 11",
-                            InstallStep::License => "Étape 2 sur 5 — Contrat de licence logicielle",
-                            InstallStep::Destination => "Étape 3 sur 5 — Dossier de destination",
-                            InstallStep::Options => "Étape 4 sur 5 — Raccourcis et pare-feu Windows",
-                            InstallStep::Installing => "Étape 5 sur 5 — Installation des composants en cours...",
-                            InstallStep::Finished => "Installation terminée avec succès",
+                            InstallStep::Welcome => match lang {
+                                InstallerLang::Fr => "Étape 1 sur 5 — Présentation & Bienvenue",
+                                InstallerLang::En => "Step 1 of 5 — Overview & Welcome",
+                                InstallerLang::Es => "Paso 1 de 5 — Presentación y Bienvenida",
+                                InstallerLang::De => "Schritt 1 von 5 — Übersicht & Willkommen",
+                                InstallerLang::Pt => "Passo 1 de 5 — Apresentação e Boas-vindas",
+                            },
+                            InstallStep::License => match lang {
+                                InstallerLang::Fr => "Étape 2 sur 5 — Contrat de licence logicielle",
+                                InstallerLang::En => "Step 2 of 5 — Software License Agreement",
+                                InstallerLang::Es => "Paso 2 de 5 — Acuerdo de licencia",
+                                InstallerLang::De => "Schritt 2 von 5 — Lizenzvereinbarung",
+                                InstallerLang::Pt => "Passo 2 de 5 — Contrato de licença",
+                            },
+                            InstallStep::Destination => match lang {
+                                InstallerLang::Fr => "Étape 3 sur 5 — Dossier de destination",
+                                InstallerLang::En => "Step 3 of 5 — Destination Folder",
+                                InstallerLang::Es => "Paso 3 de 5 — Carpeta de destino",
+                                InstallerLang::De => "Schritt 3 von 5 — Zielordner",
+                                InstallerLang::Pt => "Passo 3 de 5 — Pasta de destino",
+                            },
+                            InstallStep::Options => match lang {
+                                InstallerLang::Fr => "Étape 4 sur 5 — Raccourcis et pare-feu Windows",
+                                InstallerLang::En => "Step 4 of 5 — Shortcuts & Windows Firewall",
+                                InstallerLang::Es => "Paso 4 de 5 — Accesos directos y Cortafuegos",
+                                InstallerLang::De => "Schritt 4 von 5 — Verknüpfungen & Firewall",
+                                InstallerLang::Pt => "Passo 4 de 5 — Atalhos e Firewall do Windows",
+                            },
+                            InstallStep::Installing => match lang {
+                                InstallerLang::Fr => "Étape 5 sur 5 — Installation en cours...",
+                                InstallerLang::En => "Step 5 of 5 — Installing components...",
+                                InstallerLang::Es => "Paso 5 de 5 — Instalando...",
+                                InstallerLang::De => "Schritt 5 von 5 — Installation läuft...",
+                                InstallerLang::Pt => "Passo 5 de 5 — A instalar...",
+                            },
+                            InstallStep::Finished => match lang {
+                                InstallerLang::Fr => "Installation terminée avec succès",
+                                InstallerLang::En => "Installation completed successfully",
+                                InstallerLang::Es => "Instalación completada con éxito",
+                                InstallerLang::De => "Installation erfolgreich abgeschlossen",
+                                InstallerLang::Pt => "Instalação concluída com sucesso",
+                            },
                         };
                         ui.label(
                             RichText::new(step_subtitle)
                                 .color(WIN11_TEXT_SUB)
                                 .size(13.0),
                         );
+                    });
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        egui::ComboBox::from_id_salt("installer_lang_combo")
+                            .selected_text(RichText::new(self.lang.code()).color(WIN11_BLUE).strong())
+                            .width(56.0)
+                            .show_ui(ui, |ui| {
+                                for &l in InstallerLang::all() {
+                                    ui.selectable_value(&mut self.lang, l, format!("{} — {}", l.code(), l.label()));
+                                }
+                            });
                     });
                 });
             });
@@ -120,19 +229,33 @@ impl eframe::App for InstallerApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
+                    draw_dot(ui, WIN11_GREEN, 4.0);
                     ui.label(
-                        RichText::new("CoopLink v1.0.0")
+                        RichText::new("CoopLink v1.0.0 — Windows 11")
                             .color(WIN11_TEXT_MUTED)
                             .small(),
                     );
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let next_lbl = match lang {
+                            InstallerLang::Fr => "Suivant",
+                            InstallerLang::En => "Next",
+                            InstallerLang::Es => "Siguiente",
+                            InstallerLang::De => "Weiter",
+                            InstallerLang::Pt => "Seguinte",
+                        };
+                        let prev_lbl = match lang {
+                            InstallerLang::Fr => "Précédent",
+                            InstallerLang::En => "Back",
+                            InstallerLang::Es => "Atrás",
+                            InstallerLang::De => "Zurück",
+                            InstallerLang::Pt => "Anterior",
+                        };
+
                         match self.step {
                             InstallStep::Welcome => {
                                 let btn = egui::Button::new(
-                                    RichText::new("Suivant")
-                                        .color(Color32::WHITE)
-                                        .strong(),
+                                    RichText::new(next_lbl).color(Color32::WHITE).strong(),
                                 )
                                 .fill(WIN11_BLUE)
                                 .rounding(Rounding::same(6.0))
@@ -144,7 +267,7 @@ impl eframe::App for InstallerApp {
                             }
                             InstallStep::License => {
                                 let next_btn = egui::Button::new(
-                                    RichText::new("Suivant")
+                                    RichText::new(next_lbl)
                                         .color(if self.license_accepted {
                                             Color32::WHITE
                                         } else {
@@ -164,18 +287,13 @@ impl eframe::App for InstallerApp {
                                     self.step = InstallStep::Destination;
                                 }
 
-                                if ui
-                                    .add_sized([100.0, 34.0], egui::Button::new("Précédent"))
-                                    .clicked()
-                                {
+                                if ui.add_sized([100.0, 34.0], egui::Button::new(prev_lbl)).clicked() {
                                     self.step = InstallStep::Welcome;
                                 }
                             }
                             InstallStep::Destination => {
                                 let btn = egui::Button::new(
-                                    RichText::new("Suivant")
-                                        .color(Color32::WHITE)
-                                        .strong(),
+                                    RichText::new(next_lbl).color(Color32::WHITE).strong(),
                                 )
                                 .fill(WIN11_BLUE)
                                 .rounding(Rounding::same(6.0))
@@ -185,18 +303,20 @@ impl eframe::App for InstallerApp {
                                     self.step = InstallStep::Options;
                                 }
 
-                                if ui
-                                    .add_sized([100.0, 34.0], egui::Button::new("Précédent"))
-                                    .clicked()
-                                {
+                                if ui.add_sized([100.0, 34.0], egui::Button::new(prev_lbl)).clicked() {
                                     self.step = InstallStep::License;
                                 }
                             }
                             InstallStep::Options => {
+                                let install_lbl = match lang {
+                                    InstallerLang::Fr => "Installer",
+                                    InstallerLang::En => "Install",
+                                    InstallerLang::Es => "Instalar",
+                                    InstallerLang::De => "Installieren",
+                                    InstallerLang::Pt => "Instalar",
+                                };
                                 let install_btn = egui::Button::new(
-                                    RichText::new("Installer")
-                                        .color(Color32::WHITE)
-                                        .strong(),
+                                    RichText::new(install_lbl).color(Color32::WHITE).strong(),
                                 )
                                 .fill(WIN11_BLUE)
                                 .rounding(Rounding::same(6.0))
@@ -207,25 +327,27 @@ impl eframe::App for InstallerApp {
                                     self.start_installation();
                                 }
 
-                                if ui
-                                    .add_sized([100.0, 34.0], egui::Button::new("Précédent"))
-                                    .clicked()
-                                {
+                                if ui.add_sized([100.0, 34.0], egui::Button::new(prev_lbl)).clicked() {
                                     self.step = InstallStep::Destination;
                                 }
                             }
                             InstallStep::Installing => {
                                 ui.label(
-                                    RichText::new("Installation en cours...")
+                                    RichText::new("Installation...")
                                         .color(WIN11_BLUE)
                                         .strong(),
                                 );
                             }
                             InstallStep::Finished => {
+                                let finish_lbl = match lang {
+                                    InstallerLang::Fr => "Terminer",
+                                    InstallerLang::En => "Finish",
+                                    InstallerLang::Es => "Finalizar",
+                                    InstallerLang::De => "Fertigstellen",
+                                    InstallerLang::Pt => "Concluir",
+                                };
                                 let finish_btn = egui::Button::new(
-                                    RichText::new("Terminer")
-                                        .color(Color32::WHITE)
-                                        .strong(),
+                                    RichText::new(finish_lbl).color(Color32::WHITE).strong(),
                                 )
                                 .fill(WIN11_GREEN)
                                 .rounding(Rounding::same(6.0))
@@ -277,49 +399,111 @@ impl eframe::App for InstallerApp {
 
 impl InstallerApp {
     fn render_welcome(&self, ui: &mut Ui) {
+        let lang = self.lang;
         ui.vertical(|ui| {
             ui.label(
-                RichText::new("Bienvenue dans l'assistant d'installation de CoopLink")
-                    .color(WIN11_TEXT_MAIN)
-                    .strong()
-                    .size(17.0),
+                RichText::new(match lang {
+                    InstallerLang::Fr => "Jouez avec vos amis à distance comme si vous étiez dans le même salon",
+                    InstallerLang::En => "Play with friends remotely as if you were in the same living room",
+                    InstallerLang::Es => "Juega con tus amigos a distancia como si estuvieran en la misma sala",
+                    InstallerLang::De => "Spiele mit Freunden aus der Ferne wie im selben Wohnzimmer",
+                    InstallerLang::Pt => "Jogue com amigos à distância como se estivessem na mesma sala",
+                })
+                .color(WIN11_TEXT_MAIN)
+                .strong()
+                .size(16.5),
             );
-            ui.add_space(8.0);
+            ui.add_space(6.0);
 
             ui.label(
-                RichText::new(
-                    "Cet assistant va installer CoopLink sur votre ordinateur. CoopLink permet de jouer en réseau \
-                     local virtuel (P2P direct) et de partager votre session graphique et vos manettes à très basse \
-                     latence (technologies Sunshine & Moonlight intégrées).",
-                )
+                RichText::new(match lang {
+                    InstallerLang::Fr => "CoopLink réunit deux technologies complémentaires dans une seule application simple et sans configuration :",
+                    InstallerLang::En => "CoopLink combines two complementary gaming technologies in a single zero-configuration application:",
+                    InstallerLang::Es => "CoopLink reúne dos tecnologías en una sola aplicación sencilla y sin configuración:",
+                    InstallerLang::De => "CoopLink vereint zwei Technologien in einer einzigen, einfachen Anwendung ohne Konfiguration:",
+                    InstallerLang::Pt => "O CoopLink reúne duas tecnologias numa única aplicação simples e sem configuração:",
+                })
                 .color(WIN11_TEXT_SUB),
             );
 
-            ui.add_space(14.0);
+            ui.add_space(10.0);
 
             egui::Frame::none()
                 .fill(WIN11_SUBTLE)
                 .stroke(Stroke::new(1.0_f32, WIN11_BORDER))
-                .inner_margin(14.0)
+                .inner_margin(12.0)
                 .rounding(Rounding::same(8.0))
                 .show(ui, |ui| {
-                    ui.label(
-                        RichText::new("Fonctionnalités installées :")
-                            .color(WIN11_BLUE)
-                            .strong(),
-                    );
-                    ui.add_space(4.0);
-                    ui.label("• Maillage réseau local virtuel P2P direct (sans transit par serveur)");
-                    ui.label("• Module de streaming coopératif Sunshine (Hôte) & Moonlight (Client)");
-                    ui.label("• Jumelage automatique Zero-Config (sans code PIN manuel) & manettes ViGEmBus");
-                    ui.label("• Ouverture de port UPnP et priorité réseau automatique (métrique basse)");
+                    ui.horizontal(|ui| {
+                        draw_dot(ui, WIN11_BLUE, 4.5);
+                        ui.vertical(|ui| {
+                            ui.label(
+                                RichText::new(match lang {
+                                    InstallerLang::Fr => "1. Réseau Local Virtuel (LAN P2P Direct)",
+                                    InstallerLang::En => "1. Virtual Local Network (Direct P2P LAN)",
+                                    InstallerLang::Es => "1. Red Local Virtual (LAN P2P Directo)",
+                                    InstallerLang::De => "1. Virtuelles Lokales Netzwerk (Direktes P2P-LAN)",
+                                    InstallerLang::Pt => "1. Rede Local Virtual (LAN P2P Direto)",
+                                })
+                                .color(WIN11_BLUE)
+                                .strong(),
+                            );
+                            ui.label(
+                                RichText::new(match lang {
+                                    InstallerLang::Fr => "Reliez vos PC en connexion directe (100% P2P) pour jouer à tous vos jeux multijoueurs LAN sans ouvrir manuellement les ports de votre box.",
+                                    InstallerLang::En => "Connect your PCs directly (100% P2P) to play any LAN multiplayer game without manual router port forwarding.",
+                                    InstallerLang::Es => "Conecta tus PCs directamente (100% P2P) para jugar a cualquier juego LAN sin abrir puertos manualmente.",
+                                    InstallerLang::De => "Verbinde eure PCs direkt (100% P2P) für alle LAN-Multiplayer-Spiele ohne manuelle Portfreigabe.",
+                                    InstallerLang::Pt => "Ligue os vossos PCs diretamente (100% P2P) para jogar qualquer jogo LAN sem abrir portas manualmente.",
+                                })
+                                .color(WIN11_TEXT_SUB)
+                                .size(12.5),
+                            );
+                        });
+                    });
+
+                    ui.add_space(8.0);
+
+                    ui.horizontal(|ui| {
+                        draw_dot(ui, WIN11_GREEN, 4.5);
+                        ui.vertical(|ui| {
+                            ui.label(
+                                RichText::new(match lang {
+                                    InstallerLang::Fr => "2. Écran Partagé & Manettes Co-op (1 seul jeu requis)",
+                                    InstallerLang::En => "2. Shared Screen & Co-op Controllers (Only 1 game copy needed)",
+                                    InstallerLang::Es => "2. Pantalla Compartida y Mandos Co-op (Solo 1 copia del juego)",
+                                    InstallerLang::De => "2. Geteilter Bildschirm & Co-op Controller (Nur 1 Spiel nötig)",
+                                    InstallerLang::Pt => "2. Ecrã Partilhado e Comandos Co-op (Apenas 1 jogo necessário)",
+                                })
+                                .color(WIN11_GREEN)
+                                .strong(),
+                            );
+                            ui.label(
+                                RichText::new(match lang {
+                                    InstallerLang::Fr => "Partagez votre jeu en temps réel : vos amis rejoignent votre écran avec leurs manettes (Joueur 2, 3, 4) ou leur clavier/souris converti en manette virtuelle.",
+                                    InstallerLang::En => "Share your game in real time: friends join your screen with their gamepads (Player 2, 3, 4) or their keyboard/mouse converted into a virtual gamepad.",
+                                    InstallerLang::Es => "Comparte tu juego en tiempo real: tus amigos se unen con sus mandos (Jugador 2, 3, 4) o su teclado/ratón convertido en mando.",
+                                    InstallerLang::De => "Teile dein Spiel in Echtzeit: Freunde treten mit ihren Controllern (Spieler 2, 3, 4) oder per Tastatur/Maus bei.",
+                                    InstallerLang::Pt => "Partilhe o seu jogo em tempo real: os amigos juntam-se com os seus comandos (Jogador 2, 3, 4) ou teclado/rato.",
+                                })
+                                .color(WIN11_TEXT_SUB)
+                                .size(12.5),
+                            );
+                        });
+                    });
                 });
 
-            ui.add_space(12.0);
+            ui.add_space(10.0);
             ui.label(
-                RichText::new("Cliquez sur « Suivant » pour continuer.")
-                    .color(WIN11_TEXT_MUTED)
-                    .small(),
+                RichText::new(match lang {
+                    InstallerLang::Fr => "Cliquez sur « Suivant » pour démarrer l'installation.",
+                    InstallerLang::En => "Click 'Next' to continue setup.",
+                    InstallerLang::Es => "Haz clic en « Siguiente » para continuar.",
+                    InstallerLang::De => "Klicke auf „Weiter“, um fortzufahren.",
+                    InstallerLang::Pt => "Clique em « Seguinte » para continuar.",
+                })
+                .color(WIN11_TEXT_MUTED)
+                .small(),
             );
         });
     }
@@ -354,14 +538,14 @@ impl InstallerApp {
                                     "COOPLINK — LICENCE LOGICIELLE PROPRIÉTAIRE\n\
                                      Copyright (c) 2026 Loic HUON. Tous droits réservés.\n\n\
                                      1. PROPRIÉTÉ INTELLECTUELLE\n\
-                                     Ce logiciel, son architecture P2P, son interface et sa documentation sont la propriété\n\
-                                     exclusive de Loic HUON.\n\n\
+                                     Ce logiciel, son architecture P2P, son moteur de partage coopératif et son interface\n\
+                                     sont la propriété exclusive de Loic HUON.\n\n\
                                      2. CONDITIONS D'UTILISATION\n\
                                      Toute reproduction, revente, modification ou ingénierie inverse non autorisée est\n\
                                      strictement interdite.\n\n\
-                                     3. COMPOSANTS TIERS\n\
-                                     L'orchestration des modules de streaming s'appuie sur les protocoles compatibles\n\
-                                     Sunshine et Moonlight.",
+                                     3. CONFIDENTIALITÉ & SÉCURITÉ P2P\n\
+                                     Les sessions de jeu et de partage d'écran s'effectuent directement de pair à pair\n\
+                                     entre les participants.",
                                 )
                                 .color(WIN11_TEXT_MAIN)
                                 .small(),
@@ -484,18 +668,21 @@ impl InstallerApp {
     fn render_finished(&mut self, ui: &mut Ui) {
         ui.vertical(|ui| {
             ui.add_space(10.0);
-            ui.label(
-                RichText::new("✔ CoopLink a été installé avec succès")
-                    .color(WIN11_GREEN)
-                    .strong()
-                    .size(18.0),
-            );
+            ui.horizontal(|ui| {
+                draw_dot(ui, WIN11_GREEN, 5.5);
+                ui.label(
+                    RichText::new("CoopLink a été installé avec succès")
+                        .color(WIN11_GREEN)
+                        .strong()
+                        .size(18.0),
+                );
+            });
             ui.add_space(10.0);
 
             ui.label(
                 RichText::new(
-                    "L'application CoopLink ainsi que les modules de réseau P2P et de streaming coopératif \
-                     sont maintenant prêts à être utilisés sur votre ordinateur.",
+                    "CoopLink est maintenant prêt. Vous pouvez créer un salon P2P avec vos amis, jouer en réseau local \
+                     ou partager votre écran et vos manettes en un clic.",
                 )
                 .color(WIN11_TEXT_SUB),
             );
@@ -555,7 +742,7 @@ impl InstallerApp {
                     let _ = create_windows_shortcut(
                         &target_exe,
                         &desktop_lnk,
-                        "CoopLink - Réseau P2P & Streaming Coopératif",
+                        "CoopLink - Réseau P2P & Partage de Jeu Co-op",
                     );
                 }
             }
@@ -572,7 +759,7 @@ impl InstallerApp {
                     let _ = create_windows_shortcut(
                         &target_exe,
                         &start_menu,
-                        "CoopLink - Réseau P2P & Streaming Coopératif",
+                        "CoopLink - Réseau P2P & Partage de Jeu Co-op",
                     );
                 }
             }

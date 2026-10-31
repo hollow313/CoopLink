@@ -1,9 +1,10 @@
 use crate::config::ServerConfig;
 use crate::hub::ServerHub;
 use axum::{
-    extract::{Path, State},
+    extract::State,
+    http::{header, StatusCode},
     response::{Html, IntoResponse, Json},
-    routing::{get, post},
+    routing::get,
     Router,
 };
 use serde_json::json;
@@ -21,253 +22,521 @@ pub async fn start_web_server(hub: Arc<ServerHub>, config: ServerConfig) {
     let state = WebState { hub, config };
     let app = Router::new()
         .route("/", get(render_dashboard))
+        .route("/logo.png", get(serve_logo))
         .route("/api/stats", get(get_stats_api))
-        .route("/api/rooms", get(get_rooms_api))
-        .route("/api/rooms/{code}/kick", post(kick_room_api))
         .with_state(state.clone());
 
     let bind_addr = format!("0.0.0.0:{}", state.config.web_port);
-    info!("CoopLink Web Admin Dashboard accessible sur http://{}", bind_addr);
+    info!("CoopLink Metrics Web Platform accessible sur http://{}", bind_addr);
 
     if let Ok(listener) = tokio::net::TcpListener::bind(&bind_addr).await {
         let _ = axum::serve(listener, app).await;
     }
 }
 
+async fn serve_logo() -> impl IntoResponse {
+    let bytes = include_bytes!("CoopLink.png");
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=86400")],
+        bytes.as_slice(),
+    )
+}
+
 async fn get_stats_api(State(state): State<WebState>) -> impl IntoResponse {
     let uptime_secs = state.hub.start_time.elapsed().as_secs();
-    let tx = state.hub.total_bytes_tx.load(Ordering::Relaxed);
-    let rx = state.hub.total_bytes_rx.load(Ordering::Relaxed);
-    let relayed = state.hub.total_packets_relayed.load(Ordering::Relaxed);
-    let rooms = state.hub.get_active_rooms();
-    let total_clients = state.hub.get_total_clients();
+    let active_instances = state.hub.get_active_instances_count();
+    let active_tunnels = state.hub.get_active_tunnels_count();
+    let total_tunnels_mounted = state.hub.total_tunnels_mounted_ever.load(Ordering::Relaxed);
+    let active_screen_shares = state.hub.get_active_screen_shares_count();
+    let total_ids_issued = state.hub.get_total_ids_issued();
+    let instances = state.hub.get_active_instances();
 
     Json(json!({
         "server_name": state.config.server_name,
         "udp_port": state.config.udp_port,
         "web_port": state.config.web_port,
         "uptime_secs": uptime_secs,
-        "total_rooms": rooms.len(),
-        "total_clients": total_clients,
-        "bytes_tx": tx,
-        "bytes_rx": rx,
-        "packets_relayed": relayed,
+        "active_instances": active_instances,
+        "active_tunnels": active_tunnels,
+        "total_tunnels_mounted": total_tunnels_mounted,
+        "active_screen_shares": active_screen_shares,
+        "total_ids_issued": total_ids_issued,
+        "instances": instances,
     }))
 }
 
-async fn get_rooms_api(State(state): State<WebState>) -> impl IntoResponse {
-    let rooms = state.hub.get_active_rooms();
-    Json(json!(rooms))
-}
-
-async fn kick_room_api(
-    Path(code): Path<String>,
-    State(state): State<WebState>,
-) -> impl IntoResponse {
-    let mut rooms = state.hub.rooms.write();
-    if let Some(r) = rooms.remove(&code) {
-        for c in r.clients {
-            state.hub.clients_by_id.write().remove(&c.client_id);
-            state.hub.endpoint_to_id.write().remove(&c.endpoint);
-        }
-        Json(json!({ "success": true, "message": format!("Salle {} expulsée", code) }))
-    } else {
-        Json(json!({ "success": false, "message": "Salle introuvable" }))
-    }
-}
-
 async fn render_dashboard(State(state): State<WebState>) -> Html<String> {
-    let rooms = state.hub.get_active_rooms();
-    let total_clients = state.hub.get_total_clients();
-    let tx_mb = (state.hub.total_bytes_tx.load(Ordering::Relaxed) as f64) / (1024.0 * 1024.0);
-    let rx_mb = (state.hub.total_bytes_rx.load(Ordering::Relaxed) as f64) / (1024.0 * 1024.0);
-    let _relayed = state.hub.total_packets_relayed.load(Ordering::Relaxed);
+    let active_instances = state.hub.get_active_instances_count();
+    let active_tunnels = state.hub.get_active_tunnels_count();
+    let total_tunnels_mounted = state.hub.total_tunnels_mounted_ever.load(Ordering::Relaxed);
+    let active_screen_shares = state.hub.get_active_screen_shares_count();
+    let total_ids_issued = state.hub.get_total_ids_issued();
     let uptime_min = state.hub.start_time.elapsed().as_secs() / 60;
 
-    let mut rooms_rows = String::new();
-    let mut clients_rows = String::new();
-
-    for r in &rooms {
-        rooms_rows.push_str(&format!(
-            "<tr>\
-                <td><span class='badge cyan'>{}</span></td>\
-                <td><strong>{}</strong></td>\
-                <td><span class='badge mint'>{} joueurs</span></td>\
-                <td>#{}</td>\
-                <td><button onclick='kickRoom(\"{}\")' class='btn-kick'>Expulser</button></td>\
-            </tr>",
-            r.room_code, r.host_name, r.client_count, r.host_id, r.room_code
-        ));
-
-        for c in &r.clients {
-            let role_badge = if c.is_host {
-                "<span class='badge mint'>HÔTE</span>"
-            } else {
-                "<span class='badge cyan'>CLIENT</span>"
-            };
-            clients_rows.push_str(&format!(
-                "<tr>\
-                    <td><strong style='color:#00D2FF;'>#{}</strong></td>\
-                    <td>{}</td>\
-                    <td><span class='badge blue'>{}</span></td>\
-                    <td>{}</td>\
-                    <td><code>{}</code></td>\
-                    <td><code>{}</code></td>\
-                    <td><span style='color:#00E599;'>{} ms</span></td>\
-                </tr>",
-                c.client_id, c.player_name, c.room_code, role_badge, c.virtual_ip, c.endpoint, c.ping_ms
-            ));
-        }
-    }
-
-    if rooms_rows.is_empty() {
-        rooms_rows = "<tr><td colspan='5' style='text-align:center; color:#8E8E93; padding:20px;'>Aucun salon actif pour le moment.</td></tr>".to_string();
-    }
-    if clients_rows.is_empty() {
-        clients_rows = "<tr><td colspan='7' style='text-align:center; color:#8E8E93; padding:20px;'>Aucun client connecté pour le moment.</td></tr>".to_string();
-    }
-
-    let html = format!(r#"<!DOCTYPE html>
+    let html = format!(
+        r#"<!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CoopLink Server // Administration Centrale</title>
+    <title>CoopLink — Metrics & Unique Instance ID Hub</title>
+    <link rel="icon" type="image/png" href="/logo.png">
     <style>
         :root {{
-            --blue-electric: #0057FF;
-            --cyan-vibrant: #00D2FF;
-            --blue-deep: #0038A8;
-            --green-mint: #00BFA5;
-            --green-vivid: #00E599;
-            --orange-coral: #FF6D00;
-            --gray-neutral: #8E8E93;
-            --bg-dark: #090D16;
-            --panel-bg: #0F1626;
-            --card-bg: #141D34;
+            --bg-app: #F4F7FB;
+            --card-bg: #FFFFFF;
+            --subtle-bg: #F8FAFC;
+            --border-subtle: #E2E8F0;
+            --blue-electric: #0066FF;
+            --cyan-vibrant: #00BCF2;
+            --green-vivid: #00BA88;
+            --indigo-accent: #7B3FE4;
+            --orange-coral: #FF7A28;
+            --text-primary: #0F172A;
+            --text-secondary: #475569;
+            --text-muted: #64748B;
         }}
-        * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }}
-        body {{ background: var(--bg-dark); color: #F5F8FF; padding: 24px; }}
-        .header {{ display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid var(--blue-deep); padding-bottom: 16px; margin-bottom: 24px; }}
-        .header-title {{ display: flex; align-items: center; gap: 12px; }}
-        .header-title h1 {{ font-size: 24px; color: #FFFFFF; font-weight: 800; letter-spacing: 0.5px; }}
-        .header-title span {{ color: var(--cyan-vibrant); font-family: monospace; font-size: 14px; }}
-        .status-pill {{ background: rgba(0, 229, 153, 0.15); border: 1px solid var(--green-vivid); color: var(--green-vivid); padding: 6px 14px; border-radius: 20px; font-weight: 700; font-size: 13px; }}
-
-        .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }}
-        .stat-card {{ background: var(--panel-bg); border: 1px solid #1E2B4A; border-radius: 8px; padding: 18px; border-top: 3px solid var(--blue-electric); }}
-        .stat-card.cyan {{ border-top-color: var(--cyan-vibrant); }}
-        .stat-card.green {{ border-top-color: var(--green-vivid); }}
-        .stat-card.orange {{ border-top-color: var(--orange-coral); }}
-        .stat-label {{ color: var(--gray-neutral); font-size: 12px; font-weight: 600; text-transform: uppercase; margin-bottom: 6px; }}
-        .stat-value {{ font-size: 26px; font-weight: 800; color: #FFFFFF; }}
-
-        .section {{ background: var(--panel-bg); border: 1px solid #1E2B4A; border-radius: 8px; padding: 20px; margin-bottom: 24px; }}
-        .section-header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }}
-        .section-header h2 {{ font-size: 18px; color: var(--cyan-vibrant); font-weight: 700; }}
-
-        table {{ width: 100%; border-collapse: collapse; }}
-        th {{ text-align: left; padding: 10px 14px; color: var(--gray-neutral); font-size: 12px; font-weight: 600; text-transform: uppercase; border-bottom: 1px solid #1E2B4A; }}
-        td {{ padding: 12px 14px; border-bottom: 1px solid #152038; font-size: 14px; }}
-        tr:hover {{ background: rgba(0, 87, 255, 0.05); }}
-
-        .badge {{ padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 700; font-family: monospace; }}
-        .badge.cyan {{ background: rgba(0, 210, 255, 0.15); color: var(--cyan-vibrant); border: 1px solid var(--cyan-vibrant); }}
-        .badge.mint {{ background: rgba(0, 191, 165, 0.15); color: var(--green-mint); border: 1px solid var(--green-mint); }}
-        .badge.blue {{ background: rgba(0, 87, 255, 0.15); color: var(--blue-electric); border: 1px solid var(--blue-electric); }}
-
-        .btn-kick {{ background: #D32F2F; color: #FFF; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
-        .btn-kick:hover {{ background: #FF5252; }}
+        * {{
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+        }}
+        body {{
+            background: var(--bg-app);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }}
+        /* Barre supérieure moderne Windows 11 */
+        .topbar {{
+            background: var(--card-bg);
+            border-bottom: 1px solid var(--border-subtle);
+            padding: 14px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+        }}
+        .brand {{
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }}
+        .brand img {{
+            width: 38px;
+            height: 38px;
+            object-fit: contain;
+        }}
+        .brand-text h1 {{
+            font-size: 20px;
+            font-weight: 800;
+            color: var(--text-primary);
+            letter-spacing: -0.3px;
+        }}
+        .brand-text span {{
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--blue-electric);
+        }}
+        .topbar-right {{
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }}
+        .status-pill {{
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(0, 186, 136, 0.12);
+            border: 1px solid rgba(0, 186, 136, 0.35);
+            color: var(--green-vivid);
+            padding: 6px 14px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-weight: 700;
+        }}
+        .dot-green {{
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: var(--green-vivid);
+            box-shadow: 0 0 0 4px rgba(0, 186, 136, 0.22);
+        }}
+        .lang-select {{
+            background: var(--subtle-bg);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-primary);
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            outline: none;
+        }}
+        .container {{
+            max-width: 1220px;
+            margin: 28px auto;
+            padding: 0 24px;
+        }}
+        .metrics-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 18px;
+            margin-bottom: 24px;
+        }}
+        .metric-card {{
+            background: var(--card-bg);
+            border: 1px solid var(--border-subtle);
+            border-radius: 14px;
+            padding: 20px 22px;
+            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.03);
+            position: relative;
+            overflow: hidden;
+        }}
+        .metric-card::before {{
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: var(--blue-electric);
+        }}
+        .metric-card.green::before {{ background: var(--green-vivid); }}
+        .metric-card.cyan::before {{ background: var(--cyan-vibrant); }}
+        .metric-card.indigo::before {{ background: var(--indigo-accent); }}
+        .metric-card.orange::before {{ background: var(--orange-coral); }}
+        .metric-label {{
+            font-size: 12.5px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }}
+        .metric-value {{
+            font-size: 34px;
+            font-weight: 800;
+            color: var(--text-primary);
+            line-height: 1.1;
+        }}
+        .metric-sub {{
+            margin-top: 6px;
+            font-size: 12.5px;
+            color: var(--text-secondary);
+        }}
+        .card-section {{
+            background: var(--card-bg);
+            border: 1px solid var(--border-subtle);
+            border-radius: 14px;
+            padding: 22px 24px;
+            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.03);
+        }}
+        .section-header {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }}
+        .section-title {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 16.5px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }}
+        .section-badge {{
+            background: #EFF6FF;
+            color: var(--blue-electric);
+            border: 1px solid #BFDBFE;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+        }}
+        th {{
+            text-align: left;
+            padding: 12px 14px;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border-subtle);
+            background: var(--subtle-bg);
+        }}
+        td {{
+            padding: 14px;
+            font-size: 14px;
+            color: var(--text-primary);
+            border-bottom: 1px solid var(--border-subtle);
+        }}
+        tr:last-child td {{
+            border-bottom: none;
+        }}
+        .id-pill {{
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #EFF6FF;
+            color: var(--blue-electric);
+            border: 1px solid #BFDBFE;
+            padding: 4px 10px;
+            border-radius: 8px;
+            font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+            font-weight: 700;
+            font-size: 13px;
+        }}
+        .state-pill {{
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 12.5px;
+            font-weight: 700;
+        }}
+        .state-pill.ready {{
+            background: rgba(0, 186, 136, 0.12);
+            color: var(--green-vivid);
+        }}
+        .state-pill.tunnel {{
+            background: rgba(0, 102, 255, 0.12);
+            color: var(--blue-electric);
+        }}
+        .empty-row {{
+            text-align: center;
+            color: var(--text-muted);
+            padding: 28px !important;
+        }}
     </style>
-    <script>
-        async function kickRoom(code) {{
-            if (confirm("Voulez-vous vraiment expulser la salle " + code + " ?")) {{
-                await fetch('/api/rooms/' + code + '/kick', {{ method: 'POST' }});
-                location.reload();
-            }}
-        }}
-        // Actualisation automatique toutes les 5 secondes
-        setTimeout(() => location.reload(), 5000);
-    </script>
 </head>
 <body>
-    <div class="header">
-        <div class="header-title">
-            <h1>COOPLINK</h1>
-            <span>// CENTRAL GAMING HUB & RELAY</span>
+    <header class="topbar">
+        <div class="brand">
+            <img src="/logo.png" alt="CoopLink">
+            <div class="brand-text">
+                <h1>CoopLink Hub</h1>
+                <span id="lbl-subtitle">Télémétrie des Tunnels P2P & Attribution d'IDs Uniques</span>
+            </div>
         </div>
-        <div class="status-pill">● PORT UDP 30024 ACTIF</div>
-    </div>
+        <div class="topbar-right">
+            <div class="status-pill">
+                <span class="dot-green"></span>
+                <span id="lbl-udp-ready">Prêt — UDP 30024 Actif</span>
+            </div>
+            <select id="lang-picker" class="lang-select" onchange="applyLang(this.value)">
+                <option value="fr">FR — Français</option>
+                <option value="en">EN — English</option>
+                <option value="es">ES — Español</option>
+                <option value="de">DE — Deutsch</option>
+                <option value="pt">PT — Português</option>
+            </select>
+        </div>
+    </header>
 
-    <div class="stats-grid">
-        <div class="stat-card cyan">
-            <div class="stat-label">Salons de Jeu Actifs</div>
-            <div class="stat-value">{total_rooms}</div>
+    <main class="container">
+        <div class="metrics-grid">
+            <div class="metric-card green">
+                <div class="metric-label" id="lbl-m1">Instances Actives (En ligne)</div>
+                <div class="metric-value" id="val-instances">{active_instances}</div>
+                <div class="metric-sub" id="sub-m1">Logiciels CoopLink connectés</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label" id="lbl-m2">Tunnels P2P Montés (Actifs)</div>
+                <div class="metric-value" id="val-tunnels">{active_tunnels}</div>
+                <div class="metric-sub" id="sub-m2">100% P2P direct entre joueurs</div>
+            </div>
+            <div class="metric-card cyan">
+                <div class="metric-label" id="lbl-m3">Total Tunnels Montés (Cumulé)</div>
+                <div class="metric-value" id="val-total-tunnels">{total_tunnels_mounted}</div>
+                <div class="metric-sub" id="sub-m3">Sessions initialisées depuis le démarrage</div>
+            </div>
+            <div class="metric-card indigo">
+                <div class="metric-label" id="lbl-m4">Écrans Partagés Co-op</div>
+                <div class="metric-value" id="val-shares">{active_screen_shares}</div>
+                <div class="metric-sub" id="sub-m4">Sessions vidéo & manettes actives</div>
+            </div>
+            <div class="metric-card orange">
+                <div class="metric-label" id="lbl-m5">IDs Uniques Attribués</div>
+                <div class="metric-value" id="val-ids">{total_ids_issued}</div>
+                <div class="metric-sub" id="sub-m5">Séquence d'identifiants #CL-1001+</div>
+            </div>
         </div>
-        <div class="stat-card green">
-            <div class="stat-label">Clients Connectés (IDs)</div>
-            <div class="stat-value">{total_clients}</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-label">Trafic Réseau Relayé</div>
-            <div class="stat-value">{tx_mb:.2} Mo <span style="font-size:14px; color:#8E8E93;">/ {rx_mb:.2} Mo</span></div>
-        </div>
-        <div class="stat-card orange">
-            <div class="stat-label">Temps de fonctionnement</div>
-            <div class="stat-value">{uptime_min} min</div>
-        </div>
-    </div>
 
-    <div class="section">
-        <div class="section-header">
-            <h2>🕹️ Salons Actifs sur le Serveur</h2>
-        </div>
-        <table>
-            <thead>
-                <tr>
-                    <th>Code Salon</th>
-                    <th>Hôte de Salle</th>
-                    <th>Joueurs Connectés</th>
-                    <th>ID Hôte</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {rooms_rows}
-            </tbody>
-        </table>
-    </div>
+        <section class="card-section">
+            <div class="section-header">
+                <div class="section-title">
+                    <span class="dot-green"></span>
+                    <span id="lbl-table-title">Instances CoopLink & Identifiants Uniques Attribués</span>
+                </div>
+                <span class="section-badge" id="val-uptime">Uptime : {uptime_min} min</span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th id="th-id">ID Unique Instance</th>
+                        <th id="th-name">Utilisateur</th>
+                        <th id="th-state">Statut</th>
+                        <th id="th-tunnel">Tunnel P2P / Salon</th>
+                        <th id="th-peers">Participants</th>
+                    </tr>
+                </thead>
+                <tbody id="instances-tbody">
+                    <tr><td colspan="5" class="empty-row">En attente de connexion d'une instance CoopLink...</td></tr>
+                </tbody>
+            </table>
+        </section>
+    </main>
 
-    <div class="section">
-        <div class="section-header">
-            <h2>👥 Tous les Clients Connectés (IDs Uniques)</h2>
-        </div>
-        <table>
-            <thead>
-                <tr>
-                    <th>Client ID</th>
-                    <th>Pseudo</th>
-                    <th>Salle</th>
-                    <th>Rôle</th>
-                    <th>IP Virtuelle</th>
-                    <th>Endpoint Réel</th>
-                    <th>Latence</th>
-                </tr>
-            </thead>
-            <tbody>
-                {clients_rows}
-            </tbody>
-        </table>
-    </div>
+    <script>
+        const DICT = {{
+            fr: {{
+                subtitle: "Télémétrie des Tunnels P2P & Attribution d'IDs Uniques",
+                udpReady: "Prêt — UDP 30024 Actif",
+                m1: "Instances Actives (En ligne)", sub1: "Logiciels CoopLink connectés",
+                m2: "Tunnels P2P Montés (Actifs)", sub2: "100% P2P direct entre joueurs",
+                m3: "Total Tunnels Montés (Cumulé)", sub3: "Sessions initialisées depuis le démarrage",
+                m4: "Écrans Partagés Co-op", sub4: "Sessions vidéo & manettes actives",
+                m5: "IDs Uniques Attribués", sub5: "Séquence d'identifiants #CL-1001+",
+                tableTitle: "Instances CoopLink & Identifiants Uniques Attribués",
+                thId: "ID Unique Instance", thName: "Utilisateur", thState: "Statut", thTunnel: "Tunnel P2P / Salon", thPeers: "Participants",
+                empty: "Aucune instance active pour le moment. Lancez CoopLink sur votre PC.",
+                ready: "Prêt", tunnelMounted: "Tunnel P2P Monté", none: "En veille"
+            }},
+            en: {{
+                subtitle: "P2P Tunnel Telemetry & Unique Instance ID Assignment",
+                udpReady: "Ready — UDP 30024 Active",
+                m1: "Active Instances (Online)", sub1: "Connected CoopLink apps",
+                m2: "Mounted P2P Tunnels (Active)", sub2: "100% Direct P2P between players",
+                m3: "Total Tunnels Mounted", sub3: "Cumulative sessions since start",
+                m4: "Co-op Shared Screens", sub4: "Active video & controller sessions",
+                m5: "Unique IDs Issued", sub5: "Identifier sequence #CL-1001+",
+                tableTitle: "CoopLink Instances & Assigned Unique IDs",
+                thId: "Unique Instance ID", thName: "Player", thState: "Status", thTunnel: "P2P Tunnel / Room", thPeers: "Players",
+                empty: "No active instance yet. Launch CoopLink on your PC.",
+                ready: "Ready", tunnelMounted: "P2P Tunnel Mounted", none: "Idle"
+            }},
+            es: {{
+                subtitle: "Telemetría de Túneles P2P y Asignación de IDs Únicos",
+                udpReady: "Listo — UDP 30024 Activo",
+                m1: "Instancias Activas", sub1: "Aplicaciones CoopLink conectadas",
+                m2: "Túneles P2P Montados", sub2: "100% P2P directo entre jugadores",
+                m3: "Total Túneles Montados", sub3: "Sesiones iniciadas acumuladas",
+                m4: "Pantallas Compartidas Co-op", sub4: "Sesiones de vídeo y mandos activas",
+                m5: "IDs Únicos Asignados", sub5: "Secuencia #CL-1001+",
+                tableTitle: "Instancias de CoopLink e IDs Únicos Asignados",
+                thId: "ID Único", thName: "Jugador", thState: "Estado", thTunnel: "Túnel P2P / Sala", thPeers: "Jugadores",
+                empty: "Ninguna instancia activa. Inicia CoopLink en tu PC.",
+                ready: "Listo", tunnelMounted: "Túnel P2P Montado", none: "En espera"
+            }},
+            de: {{
+                subtitle: "P2P-Tunnel-Telemetrie & Eindeutige Instanz-IDs",
+                udpReady: "Bereit — UDP 30024 Aktiv",
+                m1: "Aktive Instanzen", sub1: "Verbundene CoopLink-Clients",
+                m2: "Aktive P2P-Tunnel", sub2: "100% Direktes P2P zwischen Spielern",
+                m3: "Gesamte P2P-Tunnel", sub3: "Kumulierte Sitzungen seit Start",
+                m4: "Co-op Bildschirmfreigaben", sub4: "Aktive Video- & Controller-Sitzungen",
+                m5: "Vergebene Eindeutige IDs", sub5: "Sequenz #CL-1001+",
+                tableTitle: "CoopLink-Instanzen & Zugewiesene IDs",
+                thId: "Eindeutige ID", thName: "Spieler", thState: "Status", thTunnel: "P2P-Tunnel / Raum", thPeers: "Spieler",
+                empty: "Keine aktive Instanz. Starte CoopLink auf deinem PC.",
+                ready: "Bereit", tunnelMounted: "P2P-Tunnel Aktiv", none: "Bereitschaft"
+            }},
+            pt: {{
+                subtitle: "Telemetria de Túneis P2P e Atribuição de IDs Únicos",
+                udpReady: "Pronto — UDP 30024 Ativo",
+                m1: "Instâncias Ativas", sub1: "Aplicações CoopLink ligadas",
+                m2: "Túneis P2P Montados", sub2: "100% P2P direto entre jogadores",
+                m3: "Total de Túneis Montados", sub3: "Sessões acumuladas desde o início",
+                m4: "Ecrãs Partilhados Co-op", sub4: "Sessões de vídeo e comando ativas",
+                m5: "IDs Únicos Atribuídos", sub5: "Sequência #CL-1001+",
+                tableTitle: "Instâncias CoopLink e IDs Únicos Atribuídos",
+                thId: "ID Único", thName: "Jogador", thState: "Estado", thTunnel: "Túnel P2P / Sala", thPeers: "Jogadores",
+                empty: "Nenhuma instância ativa. Inicie o CoopLink no seu PC.",
+                ready: "Pronto", tunnelMounted: "Túnel P2P Montado", none: "Em espera"
+            }}
+        }};
+
+        let currentLang = localStorage.getItem('cooplink_lang') || 'fr';
+        document.getElementById('lang-picker').value = currentLang;
+
+        function applyLang(lang) {{
+            currentLang = lang;
+            localStorage.setItem('cooplink_lang', lang);
+            const t = DICT[lang] || DICT.fr;
+            document.getElementById('lbl-subtitle').textContent = t.subtitle;
+            document.getElementById('lbl-udp-ready').textContent = t.udpReady;
+            document.getElementById('lbl-m1').textContent = t.m1;
+            document.getElementById('sub-m1').textContent = t.sub1;
+            document.getElementById('lbl-m2').textContent = t.m2;
+            document.getElementById('sub-m2').textContent = t.sub2;
+            document.getElementById('lbl-m3').textContent = t.m3;
+            document.getElementById('sub-m3').textContent = t.sub3;
+            document.getElementById('lbl-m4').textContent = t.m4;
+            document.getElementById('sub-m4').textContent = t.sub4;
+            document.getElementById('lbl-m5').textContent = t.m5;
+            document.getElementById('sub-m5').textContent = t.sub5;
+            document.getElementById('lbl-table-title').textContent = t.tableTitle;
+            document.getElementById('th-id').textContent = t.thId;
+            document.getElementById('th-name').textContent = t.thName;
+            document.getElementById('th-state').textContent = t.thState;
+            document.getElementById('th-tunnel').textContent = t.thTunnel;
+            document.getElementById('th-peers').textContent = t.thPeers;
+            refreshStats();
+        }}
+
+        async function refreshStats() {{
+            try {{
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+                const t = DICT[currentLang] || DICT.fr;
+
+                document.getElementById('val-instances').textContent = data.active_instances;
+                document.getElementById('val-tunnels').textContent = data.active_tunnels;
+                document.getElementById('val-total-tunnels').textContent = data.total_tunnels_mounted;
+                document.getElementById('val-shares').textContent = data.active_screen_shares;
+                document.getElementById('val-ids').textContent = data.total_ids_issued;
+                document.getElementById('val-uptime').textContent = 'Uptime : ' + Math.floor(data.uptime_secs / 60) + ' min';
+
+                const tbody = document.getElementById('instances-tbody');
+                if (!data.instances || data.instances.length === 0) {{
+                    tbody.innerHTML = `<tr><td colspan="5" class="empty-row">${{t.empty}}</td></tr>`;
+                }} else {{
+                    tbody.innerHTML = data.instances.map(inst => {{
+                        const stateHtml = inst.tunnel_mounted
+                            ? `<span class="state-pill tunnel"><span class="dot-green"></span>${{t.tunnelMounted}}</span>`
+                            : `<span class="state-pill ready"><span class="dot-green"></span>${{t.ready}}</span>`;
+                        const roomHtml = inst.tunnel_mounted ? `<strong>${{inst.room_code}}</strong>` : `<span style="color:#64748B">${{t.none}}</span>`;
+                        const peersHtml = inst.tunnel_mounted ? `${{Math.max(1, inst.peer_count)}}` : `1`;
+                        return `<tr>
+                            <td><span class="id-pill">${{inst.assigned_id}}</span></td>
+                            <td><strong>${{inst.player_name}}</strong></td>
+                            <td>${{stateHtml}}</td>
+                            <td>${{roomHtml}}</td>
+                            <td>${{peersHtml}}</td>
+                        </tr>`;
+                    }}).join('');
+                }}
+            }} catch (e) {{}}
+        }}
+
+        applyLang(currentLang);
+        setInterval(refreshStats, 2000);
+    </script>
 </body>
 </html>"#,
-        total_rooms = rooms.len(),
-        total_clients = total_clients,
-        tx_mb = tx_mb,
-        rx_mb = rx_mb,
+        active_instances = active_instances,
+        active_tunnels = active_tunnels,
+        total_tunnels_mounted = total_tunnels_mounted,
+        active_screen_shares = active_screen_shares,
+        total_ids_issued = total_ids_issued,
         uptime_min = uptime_min,
-        rooms_rows = rooms_rows,
-        clients_rows = clients_rows,
     );
 
     Html(html)

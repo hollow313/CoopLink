@@ -1,8 +1,17 @@
+use crate::i18n::Language;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
+
+fn default_central_server() -> String {
+    "127.0.0.1:30024".to_string()
+}
+
+fn default_instance_uuid() -> u64 {
+    rand::random::<u64>() % 900_000 + 100_000
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -18,6 +27,12 @@ pub struct AppConfig {
     pub enable_audio_feedback: bool,
     pub enable_upnp: bool,
     pub remote_server_address: String,
+    #[serde(default = "default_central_server")]
+    pub central_server_address: String,
+    #[serde(default = "default_instance_uuid")]
+    pub instance_uuid: u64,
+    #[serde(default)]
+    pub language: Language,
     pub room_password: String,
     pub scanline_intensity: f32,
 }
@@ -38,6 +53,9 @@ impl Default for AppConfig {
             enable_audio_feedback: true,
             enable_upnp: true,
             remote_server_address: "127.0.0.1:42422".to_string(),
+            central_server_address: default_central_server(),
+            instance_uuid: default_instance_uuid(),
+            language: Language::Fr,
             room_password: String::new(),
             scanline_intensity: 0.15,
         }

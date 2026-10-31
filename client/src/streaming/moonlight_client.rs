@@ -36,6 +36,7 @@ pub enum StreamDisplayMode {
     BorderlessFullscreen, // Plein écran sans bordure
 }
 
+#[allow(dead_code)]
 impl StreamDisplayMode {
     pub fn label(&self) -> &'static str {
         match self {
