@@ -1,0 +1,22 @@
+# CoopLink .gitignore
+
+# Rust build output
+/target/
+**/*.rs.bk
+*.pdb
+
+# Dependencies sources & vendor
+/sources/
+
+# OS specific files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Cargo lock can be tracked or ignored (typically tracked for binaries)
