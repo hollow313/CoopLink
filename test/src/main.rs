@@ -241,10 +241,6 @@ impl TestGameApp {
 
                 loop {
                     if let Ok((len, src)) = sock.recv_from(&mut buf) {
-                        if src.ip().is_loopback() {
-                            continue;
-                        }
-
                         if let Ok(msg) = std::str::from_utf8(&buf[..len]) {
                             let parts: Vec<&str> = msg.split(':').collect();
                             if parts.len() >= 2 {

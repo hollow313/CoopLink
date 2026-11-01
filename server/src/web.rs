@@ -30,7 +30,7 @@ pub async fn start_web_server(hub: Arc<ServerHub>, config: ServerConfig) {
         .route("/api/telemetry", post(post_telemetry_api))
         .route("/api/myip", get(get_my_ip_api))
         .route("/api/rooms/register", post(post_register_room_api))
-        .route("/api/rooms/:code", get(get_room_by_code_api))
+        .route("/api/rooms/{code}", get(get_room_by_code_api))
         .with_state(state);
 
     // 1. Écoute HTTP sur le port 30024 (TCP) pour le Reverse Proxy https://cooplink.home-lh.ovh -> 30024
