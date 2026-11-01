@@ -414,10 +414,17 @@ impl CoopCaptureHost {
             self.audio_capture_mode.as_conf_str()
         );
 
-        let exe_candidates = [
+        let mut exe_candidates = vec![
             PathBuf::from("cooplink-capture-service.exe"),
             PathBuf::from("bin/cooplink-capture-service.exe"),
         ];
+
+        if let Ok(cur) = std::env::current_exe() {
+            if let Some(parent) = cur.parent() {
+                exe_candidates.push(parent.join("cooplink-capture-service.exe"));
+                exe_candidates.push(parent.join("bin").join("cooplink-capture-service.exe"));
+            }
+        }
 
         for candidate in &exe_candidates {
             if candidate.exists() {

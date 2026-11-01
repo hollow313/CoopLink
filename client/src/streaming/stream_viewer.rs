@@ -106,10 +106,17 @@ impl CoopStreamViewer {
             host_str, app_name, codec_str
         );
 
-        let exe_candidates = [
+        let mut exe_candidates = vec![
             PathBuf::from("cooplink-viewer.exe"),
             PathBuf::from("bin/cooplink-viewer.exe"),
         ];
+
+        if let Ok(cur) = std::env::current_exe() {
+            if let Some(parent) = cur.parent() {
+                exe_candidates.push(parent.join("cooplink-viewer.exe"));
+                exe_candidates.push(parent.join("bin").join("cooplink-viewer.exe"));
+            }
+        }
 
         for candidate in &exe_candidates {
             if candidate.exists() {
@@ -140,10 +147,9 @@ impl CoopStreamViewer {
                     args.push("--no-mouse-capture");
                 }
 
-                let _ = crate::platform::windows::process::spawn_hidden(
-                    &candidate.to_string_lossy(),
-                    &args,
-                );
+                let _ = std::process::Command::new(candidate)
+                    .args(&args)
+                    .spawn();
                 break;
             }
         }

@@ -48,3 +48,11 @@ path = "src/main.rs"
 [[bin]]
 name = "cooplink-setup"
 path = "src/installer/main.rs"
+
+[[bin]]
+name = "cooplink-viewer"
+path = "src/bin/viewer.rs"
+
+[[bin]]
+name = "cooplink-capture-service"
+path = "src/bin/capture_service.rs"

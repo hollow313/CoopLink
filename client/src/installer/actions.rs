@@ -298,7 +298,34 @@ pub fn populate_complete_software_tree(
             "<Application xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n  <VisualElements BackgroundColor=\"#0066FF\" ShowNameOnSquare150x150Logo=\"on\" ForegroundText=\"light\" Square150x150Logo=\"resources\\CoopLink.png\" Square70x70Logo=\"resources\\CoopLink.png\"/>\n</Application>\n",
         );
 
-        // B. Dossier `bin\` ( descripteurs de modules propres JSON — aucun faux binaire MZ/PE )
+        // B. Copie des binaires de Streaming réels dans `bin\` et à la racine
+        let sibling_or_target = |bin_name: &str| -> Option<PathBuf> {
+            if let Some(parent) = installer_exe.parent() {
+                let p = parent.join(bin_name);
+                if p.exists() { return Some(p); }
+            }
+            let candidates = [
+                format!("target\\release\\{}", bin_name),
+                format!("..\\target\\release\\{}", bin_name),
+                format!("D:\\Loic\\Antigravity\\CoopLink\\target\\release\\{}", bin_name),
+            ];
+            for c in &candidates {
+                let p = PathBuf::from(c);
+                if p.exists() { return Some(p); }
+            }
+            None
+        };
+
+        if let Some(src) = sibling_or_target("cooplink-viewer.exe") {
+            let _ = fs::copy(&src, base.join("cooplink-viewer.exe"));
+            let _ = fs::copy(&src, bin_dir.join("cooplink-viewer.exe"));
+        }
+        if let Some(src) = sibling_or_target("cooplink-capture-service.exe") {
+            let _ = fs::copy(&src, base.join("cooplink-capture-service.exe"));
+            let _ = fs::copy(&src, bin_dir.join("cooplink-capture-service.exe"));
+        }
+
+        // Descripteurs de modules JSON
         let _ = fs::write(
             bin_dir.join("capture_engine_module.json"),
             "{\n  \"module\": \"cooplink-foreground-capture\",\n  \"version\": \"1.0.0\",\n  \"api\": \"DirectX 12 Desktop Duplication\",\n  \"encoders\": [\"nvenc\", \"amf\", \"quicksync\"]\n}\n",
