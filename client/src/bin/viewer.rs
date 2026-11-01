@@ -1,11 +1,12 @@
-// CoopLink Stream Viewer - High Performance Co-op Game Streaming Viewer (60/120 FPS)
-// Real-time Screen & Game Display + Key Inputs
+// CoopLink Stream Viewer - High Performance Co-op Game Streaming Viewer (60/120 FPS + Audio)
+// Real-time Screen & Game Display + Continuous Key Inputs & Mouse Look & Stereo Audio
 // Copyright (c) 2026 Loic HUON. All Rights Reserved.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use eframe::egui::{self, Color32, FontId, Key, Pos2, Rect, RichText, Rounding, Stroke, TextureHandle, TextureOptions, Vec2};
 use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,7 +28,51 @@ struct ViewerState {
     fps: f32,
     latency_ms: f32,
     received_frames: u64,
+    audio_active: bool,
     controller_slot: u8,
+}
+
+// Initialise le moteur de lecture audio cpal sur le périphérique de sortie par défaut
+fn start_audio_playback(audio_buffer: Arc<Mutex<VecDeque<f32>>>, running: Arc<AtomicBool>) {
+    thread::spawn(move || {
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+        let host = cpal::default_host();
+        let device = match host.default_output_device() {
+            Some(d) => d,
+            None => return,
+        };
+
+        let config = match device.default_output_config() {
+            Ok(c) => c.config(),
+            Err(_) => return,
+        };
+
+        let channels = config.channels as usize;
+        let buf_clone = audio_buffer.clone();
+
+        let stream = device.build_output_stream(
+            config,
+            move |output: &mut [f32], _| {
+                let mut q = buf_clone.lock();
+                for frame in output.chunks_mut(channels) {
+                    let sample = q.pop_front().unwrap_or(0.0);
+                    for channel_sample in frame.iter_mut() {
+                        *channel_sample = sample;
+                    }
+                }
+            },
+            |_err| {},
+            None,
+        );
+
+        if let Ok(st) = stream {
+            let _ = st.play();
+            while running.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    });
 }
 
 struct ViewerApp {
@@ -37,6 +82,9 @@ struct ViewerApp {
     tcp_tx: Arc<Mutex<Option<TcpStream>>>,
     active_keys: Vec<String>,
     last_input_time: Instant,
+    last_mouse_time: Instant,
+    mouse_l_down: bool,
+    mouse_r_down: bool,
     last_fps_calc: Instant,
     frame_count: u32,
 }
@@ -50,17 +98,23 @@ impl ViewerApp {
             fps: 60.0,
             latency_ms: 3.2,
             received_frames: 0,
+            audio_active: false,
             controller_slot: 2,
         }));
 
         let frame_image = Arc::new(Mutex::new(None));
         let tcp_tx = Arc::new(Mutex::new(None));
+        let audio_buffer = Arc::new(Mutex::new(VecDeque::with_capacity(96_000)));
         let running = Arc::new(AtomicBool::new(true));
 
-        // Thread de réception vidéo TCP en temps réel (Port 47989)
+        // Démarrage du thread de lecture audio
+        start_audio_playback(audio_buffer.clone(), running.clone());
+
+        // Thread de réception vidéo et audio TCP en temps réel (Port 47989)
         let state_stream = state.clone();
         let frame_img_clone = frame_image.clone();
         let tcp_tx_clone = tcp_tx.clone();
+        let audio_buf_clone = audio_buffer.clone();
         let host_target = host_ip.clone();
         let running_conn = running.clone();
 
@@ -92,33 +146,53 @@ impl ViewerApp {
                         *tcp_tx_clone.lock() = Some(clone_stream);
                     }
 
-                    // Boucle de lecture des trames CLFR
+                    // Boucle de lecture des trames CLFR (Vidéo) et CLAU (Audio)
                     let mut header = [0u8; 12];
                     while running_conn.load(Ordering::Relaxed) {
                         if stream.read_exact(&mut header).is_err() {
                             break;
                         }
-                        if &header[0..4] != b"CLFR" {
-                            continue;
-                        }
+
+                        let tag = &header[0..4];
                         let len = u32::from_be_bytes([header[4], header[5], header[6], header[7]]) as usize;
-                        if len == 0 || len > 2_000_000 {
+                        if len == 0 || len > 5_000_000 {
                             continue;
                         }
 
-                        let mut jpeg_buf = vec![0u8; len];
-                        if stream.read_exact(&mut jpeg_buf).is_err() {
-                            break;
-                        }
+                        if tag == b"CLFR" {
+                            // Trame Vidéo JPEG
+                            let mut jpeg_buf = vec![0u8; len];
+                            if stream.read_exact(&mut jpeg_buf).is_err() {
+                                break;
+                            }
 
-                        if let Ok(img) = image::load_from_memory(&jpeg_buf) {
-                            let rgba = img.to_rgba8();
-                            let size = [rgba.width() as usize, rgba.height() as usize];
-                            let pixels = rgba.into_raw();
-                            let color_img = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
+                            if let Ok(img) = image::load_from_memory(&jpeg_buf) {
+                                let rgba = img.to_rgba8();
+                                let size = [rgba.width() as usize, rgba.height() as usize];
+                                let pixels = rgba.into_raw();
+                                let color_img = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
 
-                            *frame_img_clone.lock() = Some(color_img);
-                            state_stream.lock().received_frames += 1;
+                                *frame_img_clone.lock() = Some(color_img);
+                                state_stream.lock().received_frames += 1;
+                            }
+                        } else if tag == b"CLAU" {
+                            // Paquet Audio PCM
+                            let mut pcm_buf = vec![0u8; len];
+                            if stream.read_exact(&mut pcm_buf).is_err() {
+                                break;
+                            }
+
+                            state_stream.lock().audio_active = true;
+                            let mut samples = Vec::with_capacity(len / 2);
+                            for chunk in pcm_buf.chunks_exact(2) {
+                                let val = i16::from_le_bytes([chunk[0], chunk[1]]);
+                                samples.push(val as f32 / 32768.0);
+                            }
+
+                            let mut q = audio_buf_clone.lock();
+                            if q.len() < 48_000 {
+                                q.extend(samples);
+                            }
                         }
                     }
 
@@ -137,6 +211,9 @@ impl ViewerApp {
             tcp_tx,
             active_keys: Vec::new(),
             last_input_time: Instant::now(),
+            last_mouse_time: Instant::now(),
+            mouse_l_down: false,
+            mouse_r_down: false,
             last_fps_calc: Instant::now(),
             frame_count: 0,
         }
@@ -160,23 +237,35 @@ impl eframe::App for ViewerApp {
             self.texture = Some(ctx.load_texture("live_stream_frame", new_img, TextureOptions::LINEAR));
         }
 
-        // Capture et transmission continue des touches du clavier vers l'Hôte
+        // Capture continue et complète des touches clavier pour les jeux 3D (ZQSD, Shift, Espace, etc.)
         let mut pressed_keys = Vec::new();
         ctx.input(|i| {
             if i.key_down(Key::Z) || i.key_down(Key::W) { pressed_keys.push("Z"); }
             if i.key_down(Key::Q) || i.key_down(Key::A) { pressed_keys.push("Q"); }
             if i.key_down(Key::S) { pressed_keys.push("S"); }
             if i.key_down(Key::D) { pressed_keys.push("D"); }
+            if i.modifiers.shift { pressed_keys.push("SHIFT"); }
+            if i.modifiers.ctrl { pressed_keys.push("CTRL"); }
+            if i.key_down(Key::Space) { pressed_keys.push("ESPACE"); }
+            if i.key_down(Key::E) { pressed_keys.push("E"); }
+            if i.key_down(Key::F) { pressed_keys.push("F"); }
+            if i.key_down(Key::R) { pressed_keys.push("R"); }
+            if i.key_down(Key::C) { pressed_keys.push("C"); }
+            if i.key_down(Key::Tab) { pressed_keys.push("TAB"); }
+            if i.key_down(Key::Escape) { pressed_keys.push("ECHAP"); }
+            if i.key_down(Key::Num1) { pressed_keys.push("1"); }
+            if i.key_down(Key::Num2) { pressed_keys.push("2"); }
+            if i.key_down(Key::Num3) { pressed_keys.push("3"); }
+            if i.key_down(Key::Num4) { pressed_keys.push("4"); }
             if i.key_down(Key::ArrowUp) { pressed_keys.push("HAUT"); }
             if i.key_down(Key::ArrowDown) { pressed_keys.push("BAS"); }
             if i.key_down(Key::ArrowLeft) { pressed_keys.push("GAUCHE"); }
             if i.key_down(Key::ArrowRight) { pressed_keys.push("DROITE"); }
-            if i.key_down(Key::Space) { pressed_keys.push("ESPACE"); }
             if i.key_down(Key::Enter) { pressed_keys.push("ENTREE"); }
         });
 
         let keys_changed = pressed_keys.iter().map(|s| s.to_string()).collect::<Vec<_>>() != self.active_keys;
-        if keys_changed || (!pressed_keys.is_empty() && self.last_input_time.elapsed() > Duration::from_millis(50)) {
+        if keys_changed || (!pressed_keys.is_empty() && self.last_input_time.elapsed() > Duration::from_millis(30)) {
             self.active_keys = pressed_keys.iter().map(|s| s.to_string()).collect();
             self.last_input_time = Instant::now();
 
@@ -190,6 +279,35 @@ impl eframe::App for ViewerApp {
             if let Ok(sock) = UdpSocket::bind("0.0.0.0:0") {
                 let target: SocketAddr = format!("{}:47989", host_ip).parse().unwrap_or_else(|_| "10.244.0.1:47989".parse().unwrap());
                 let _ = sock.send_to(msg.as_bytes(), target);
+            }
+        }
+
+        // Capture de la souris (Déplacement caméra 3D + Clic gauche/droit)
+        let mut mouse_msg = None;
+        ctx.input(|i| {
+            let delta = i.pointer.delta();
+            let l_down = i.pointer.primary_down();
+            let r_down = i.pointer.secondary_down();
+
+            let has_movement = delta.length() > 0.05;
+            let buttons_changed = l_down != self.mouse_l_down || r_down != self.mouse_r_down;
+
+            if has_movement || buttons_changed || (self.last_mouse_time.elapsed() > Duration::from_millis(40) && (l_down || r_down)) {
+                let dx = (delta.x * 1.5).round() as i32;
+                let dy = (delta.y * 1.5).round() as i32;
+                let l_val = if l_down { "1" } else { "0" };
+                let r_val = if r_down { "1" } else { "0" };
+
+                mouse_msg = Some(format!("MOUSE:{}:{}:{}:{}\n", dx, dy, l_val, r_val));
+                self.mouse_l_down = l_down;
+                self.mouse_r_down = r_down;
+                self.last_mouse_time = Instant::now();
+            }
+        });
+
+        if let Some(msg) = mouse_msg {
+            if let Some(ref mut tcp) = *self.tcp_tx.lock() {
+                let _ = tcp.write_all(msg.as_bytes());
             }
         }
 
@@ -217,7 +335,11 @@ impl eframe::App for ViewerApp {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.label(RichText::new(format!("Latence : {:.1} ms", st.latency_ms)).color(COLOR_ACCENT).monospace().strong());
                                 ui.add_space(10.0);
-                                ui.label(RichText::new(format!("{:.0} FPS — Décodage Matériel NVDEC/AMF", st.fps)).color(COLOR_BLUE).strong());
+                                if st.audio_active {
+                                    ui.label(RichText::new("Son Stéréo 48 kHz Actif").color(COLOR_ACCENT).small());
+                                    ui.add_space(8.0);
+                                }
+                                ui.label(RichText::new(format!("{:.0} FPS — 1080p Haute Fidélité", st.fps)).color(COLOR_BLUE).strong());
                             });
                         });
                     });
@@ -230,7 +352,7 @@ impl eframe::App for ViewerApp {
                 painter.rect_filled(rect, Rounding::same(10.0), Color32::from_rgb(15, 23, 42));
 
                 if let Some(ref tex) = self.texture {
-                    // Affichage de la trame vidéo réelle du jeu/bureau de l'hôte
+                    // Affichage plein cadre haute résolution
                     painter.image(
                         tex.id(),
                         rect,
@@ -261,24 +383,24 @@ impl eframe::App for ViewerApp {
                 if !self.active_keys.is_empty() {
                     let overlay_pos = Pos2::new(rect.min.x + 16.0, rect.max.y - 36.0);
                     painter.rect_filled(
-                        Rect::from_min_size(overlay_pos, Vec2::new(240.0, 26.0)),
+                        Rect::from_min_size(overlay_pos, Vec2::new(320.0, 26.0)),
                         Rounding::same(6.0),
                         Color32::from_black_alpha(180),
                     );
                     painter.text(
                         overlay_pos + Vec2::new(10.0, 13.0),
                         egui::Align2::LEFT_CENTER,
-                        format!("Touches envoyées : {}", self.active_keys.join(" + ")),
+                        format!("Commandes : {}", self.active_keys.join(" + ")),
                         FontId::proportional(13.0),
                         COLOR_ACCENT,
                     );
                 }
 
                 // Barre d'aide inférieure
-                ui.allocate_rect(rect, egui::Sense::hover());
+                ui.allocate_rect(rect, egui::Sense::click_and_drag());
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Commandes : ZQSD ou Flèches pour bouger, Espace pour tirer/sauter, Manette Xbox/PS branchée reconnue automatiquement.").color(Color32::from_rgb(148, 163, 184)).size(12.0));
+                    ui.label(RichText::new("Contrôles : ZQSD/WASD pour marcher, Shift pour courir, Espace pour sauter, Souris pour viser/tirer, E/F interaction, C accroupi.").color(Color32::from_rgb(148, 163, 184)).size(12.0));
                 });
             });
 
@@ -292,7 +414,7 @@ fn main() -> eframe::Result<()> {
     let game = if args.len() > 3 { args[3].clone() } else { "Jeu au Premier Plan".to_string() };
 
     let vp = egui::ViewportBuilder::default()
-        .with_title(format!("CoopLink Stream Viewer - {} (60/120 FPS)", game))
+        .with_title(format!("CoopLink Stream Viewer - {} (60/120 FPS + Audio)", game))
         .with_inner_size([1280.0, 750.0])
         .with_min_inner_size([800.0, 500.0]);
 

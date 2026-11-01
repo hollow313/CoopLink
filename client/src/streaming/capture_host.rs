@@ -435,7 +435,7 @@ impl CoopCaptureHost {
                 let conf_str = conf_path.to_string_lossy().to_string();
                 match crate::platform::windows::process::spawn_hidden(
                     &candidate.to_string_lossy(),
-                    &[&conf_str],
+                    &[&conf_str, target_game_exe],
                 ) {
                     Ok(_) => {
                         info!("Service de capture vidéo démarré : {}", candidate.display());

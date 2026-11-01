@@ -642,9 +642,12 @@ impl NetworkTunnel {
                                 CoopPacket::Pong { timestamp_ms, .. } => {
                                     let now_ms = current_timestamp_ms();
                                     let rtt = (now_ms.saturating_sub(timestamp_ms)).min(999) as u32;
-                                    if let Some(host_peer) = peers_map.write().get_mut(&1) {
-                                        host_peer.ping_ms = rtt;
-                                        host_peer.last_seen_secs = current_timestamp_secs();
+                                    let mut p_map = peers_map.write();
+                                    for peer in p_map.values_mut() {
+                                        if peer.is_host {
+                                            peer.ping_ms = rtt;
+                                            peer.last_seen_secs = current_timestamp_secs();
+                                        }
                                     }
                                 }
                                 CoopPacket::TunnelData { payload, .. } => {
@@ -654,9 +657,15 @@ impl NetworkTunnel {
                                     let _ = to_bcast_tx.send((port, payload)).await;
                                 }
                                 CoopPacket::PeerListUpdate { raw_json } => {
-                                    if let Ok(updated_peers) =
+                                    if let Ok(mut updated_peers) =
                                         serde_json::from_str::<HashMap<u64, PeerInfo>>(&raw_json)
                                     {
+                                        let current_ping = peers_map.read().values().find(|p| p.is_host).map(|p| p.ping_ms).unwrap_or(15);
+                                        for p in updated_peers.values_mut() {
+                                            if p.is_host && current_ping > 0 {
+                                                p.ping_ms = current_ping;
+                                            }
+                                        }
                                         *peers_map.write() = updated_peers;
                                     }
                                 }

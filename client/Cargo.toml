@@ -29,6 +29,7 @@ sha2 = "0.10"
 hmac = "0.12"
 igd-next = "0.18.0"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+cpal = "0.18.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = [

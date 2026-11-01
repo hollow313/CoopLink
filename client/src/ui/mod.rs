@@ -707,7 +707,21 @@ impl eframe::App for CoopLinkApp {
             self.add_log(LogLevel::Error, &format!("Connexion refusée : {}", err_msg));
         }
 
-        self.state.peers = self.tunnel.peers.read().values().cloned().collect();
+        {
+            let peers_raw = self.tunnel.peers.read();
+            let mut unique: Vec<crate::types::PeerInfo> = Vec::new();
+            for p in peers_raw.values() {
+                if let Some(existing) = unique.iter_mut().find(|e| e.virtual_ip == p.virtual_ip) {
+                    if p.ping_ms > 0 && existing.ping_ms == 0 {
+                        *existing = p.clone();
+                    }
+                } else {
+                    unique.push(p.clone());
+                }
+            }
+            unique.sort_by_key(|p| p.virtual_ip);
+            self.state.peers = unique;
+        }
         self.state.unique_instance_id = self.telemetry.assigned_id.read().clone();
         self.state.central_server_connected = self.telemetry.server_connected.load(Ordering::Relaxed);
         self.sync_telemetry();
