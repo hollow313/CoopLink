@@ -360,43 +360,31 @@ fn render_connection_dashboard(
                     ui.add_space(8.0);
                     ui.label(
                         RichText::new(match lang {
-                            Language::Fr => "Entrez l'adresse de votre ami pour vous connecter directement à son salon :",
-                            Language::En => "Enter your friend's address to connect directly to their room:",
-                            Language::Es => "Introduce la dirección de tu amigo para unirte:",
-                            Language::De => "Gib die Adresse deines Freundes ein:",
-                            Language::Pt => "Introduza o endereço do seu amigo para se ligar:",
+                            Language::Fr => "Connectez-vous directement au PC de votre ami avec son adresse directe et son Code de salon :",
+                            Language::En => "Connect directly to your friend's PC using their direct address and Room Code:",
+                            Language::Es => "Conéctate directamente al PC de tu amigo con su dirección y código de sala:",
+                            Language::De => "Verbinde dich direkt mit dem PC deines Freundes über Adresse und Raumcode:",
+                            Language::Pt => "Ligue-se diretamente ao PC do seu amigo com o endereço e código da sala:",
                         })
                         .color(ModernTheme::TEXT_SECONDARY)
                         .size(13.0),
                     );
                     ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(match lang {
-                                Language::Fr => "Adresse de l'Hôte :",
-                                Language::En => "Host Address:",
-                                Language::Es => "Dirección del Anfitrión:",
-                                Language::De => "Host-Adresse:",
-                                Language::Pt => "Endereço do Anfitrião:",
-                            })
-                            .color(ModernTheme::TEXT_SECONDARY)
-                            .size(13.0),
-                        );
-                        ui.add(
-                            egui::TextEdit::singleline(&mut config.remote_server_address)
-                                .desired_width(175.0),
-                        );
-                    });
+                    ui.label(
+                        RichText::new(format!("Dernière adresse : {}", config.remote_server_address))
+                            .color(ModernTheme::TEXT_MUTED)
+                            .small(),
+                    );
 
                     ui.add_space(14.0);
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                         let join_btn = egui::Button::new(
                             RichText::new(match lang {
-                                Language::Fr => "Rejoindre le salon",
-                                Language::En => "Join Room",
-                                Language::Es => "Unirse a la Sala",
-                                Language::De => "Raum beitreten",
-                                Language::Pt => "Entrar na Sala",
+                                Language::Fr => "Rejoindre un salon (Pop-up Code & IP)",
+                                Language::En => "Join Room (Enter Code & IP)",
+                                Language::Es => "Unirse a Sala (Código e IP)",
+                                Language::De => "Raum beitreten (Code & IP)",
+                                Language::Pt => "Entrar na Sala (Código e IP)",
                             })
                             .color(Color32::WHITE)
                             .strong()
@@ -406,7 +394,7 @@ fn render_connection_dashboard(
                         .rounding(Rounding::same(8.0))
                         .min_size(egui::vec2(ui.available_width(), 40.0));
 
-                        if ui.add(join_btn).clicked() {
+                        if ui.add(join_btn).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                             *on_join_clicked = true;
                         }
                     });

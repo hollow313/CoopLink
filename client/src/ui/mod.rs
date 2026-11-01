@@ -75,6 +75,7 @@ pub struct CoopLinkApp {
     pub show_welcome_tutorial: bool,
     pub tutorial_step: usize,
     pub tutorial_optimization_applied: bool,
+    pub show_join_modal: bool,
 }
 
 impl CoopLinkApp {
@@ -141,6 +142,7 @@ impl CoopLinkApp {
             show_welcome_tutorial: first_tutorial_needed,
             tutorial_step: 0,
             tutorial_optimization_applied: false,
+            show_join_modal: false,
         };
 
         app.trigger_refresh_interfaces();
@@ -325,6 +327,123 @@ impl eframe::App for CoopLinkApp {
                     }
                 });
             });
+        }
+
+        // Fenêtre Pop-up intuitive pour rejoindre un ami
+        if self.show_join_modal {
+            let lang = self.config.language;
+            let mut join_confirmed = false;
+            egui::Window::new(match lang {
+                Language::Fr => "Rejoindre le salon d'un ami — CoopLink",
+                Language::En => "Join Friend's Room — CoopLink",
+                Language::Es => "Unirse a la sala de un amigo — CoopLink",
+                Language::De => "Raum eines Freundes beitreten — CoopLink",
+                Language::Pt => "Entrar na sala de um amigo — CoopLink",
+            })
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .fixed_size(egui::vec2(520.0, 320.0))
+            .show(ctx, |ui| {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(match lang {
+                        Language::Fr => "Entrez les informations fournies par l'hôte pour vous connecter directement en P2P :",
+                        Language::En => "Enter the details provided by the host to connect directly via P2P:",
+                        Language::Es => "Introduce los datos del anfitrión para conectarte directamente por P2P:",
+                        Language::De => "Gib die Details des Hosts ein, um dich direkt per P2P zu verbinden:",
+                        Language::Pt => "Introduza os dados fornecidos pelo anfitrião para ligação direta P2P:",
+                    })
+                    .color(ModernTheme::TEXT_SECONDARY)
+                    .size(13.0),
+                );
+                ui.add_space(14.0);
+
+                // 1. Adresse de l'Hôte
+                ui.label(RichText::new("1. Adresse directe de l'Hôte (IP:Port) :").color(ModernTheme::TEXT_PRIMARY).strong());
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.config.remote_server_address)
+                            .hint_text("ex: 82.66.152.133:42422")
+                            .desired_width(360.0),
+                    );
+                    if ui.button("Coller").clicked() {
+                        let text = ctx.output(|o| o.copied_text.clone());
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() {
+                            self.config.remote_server_address = trimmed.to_string();
+                        }
+                    }
+                });
+                ui.add_space(10.0);
+
+                // 2. Code du salon
+                ui.label(RichText::new("2. Code du salon (Clé de session) :").color(ModernTheme::TEXT_PRIMARY).strong());
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.state.room_code)
+                            .hint_text("ex: COOP-7701")
+                            .desired_width(360.0),
+                    );
+                    if ui.button("Coller").clicked() {
+                        let text = ctx.output(|o| o.copied_text.clone());
+                        let trimmed = text.trim();
+                        if trimmed.starts_with("COOP-") || trimmed.len() >= 4 {
+                            self.state.room_code = trimmed.to_string();
+                        }
+                    }
+                });
+                ui.add_space(10.0);
+
+                // 3. Mot de passe
+                ui.label(RichText::new("3. Mot de passe de session (Optionnel) :").color(ModernTheme::TEXT_PRIMARY).strong());
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.config.room_password)
+                        .password(true)
+                        .hint_text("Laisser vide si l'hôte n'a pas défini de mot de passe...")
+                        .desired_width(420.0),
+                );
+
+                ui.add_space(18.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    let join_btn = egui::Button::new(
+                        RichText::new(match lang {
+                            Language::Fr => "Se connecter au salon",
+                            Language::En => "Connect to Room",
+                            Language::Es => "Conectarse a la sala",
+                            Language::De => "Mit Raum verbinden",
+                            Language::Pt => "Ligar à sala",
+                        })
+                        .color(Color32::WHITE)
+                        .strong()
+                        .size(14.0),
+                    )
+                    .fill(ModernTheme::GREEN_VIVID)
+                    .rounding(Rounding::same(8.0))
+                    .min_size(egui::vec2(210.0, 36.0));
+
+                    if ui.add(join_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                        join_confirmed = true;
+                    }
+
+                    if ui
+                        .add_sized([100.0, 36.0], egui::Button::new("Annuler"))
+                        .on_hover_cursor(CursorIcon::PointingHand)
+                        .clicked()
+                    {
+                        self.show_join_modal = false;
+                    }
+                });
+            });
+
+            if join_confirmed {
+                self.show_join_modal = false;
+                let _ = self.config.save();
+                self.start_client_node();
+            }
         }
 
         // Fenêtre d'accueil & Tutoriel interactif de premier lancement
@@ -861,7 +980,7 @@ impl eframe::App for CoopLinkApp {
                     self.start_host_node();
                 }
                 if on_join_clicked {
-                    self.start_client_node();
+                    self.show_join_modal = true;
                 }
                 if on_disconnect_clicked {
                     self.disconnect_node();

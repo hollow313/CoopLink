@@ -28,6 +28,8 @@ pub struct NetworkTunnel {
     pub ip_to_id: Arc<RwLock<HashMap<Ipv4Addr, u64>>>,
     pub bytes_tx: Arc<AtomicU64>,
     pub bytes_rx: Arc<AtomicU64>,
+    pub host_socket: Arc<RwLock<Option<Arc<UdpSocket>>>>,
+    pub active_session_key: Arc<RwLock<Option<[u8; 32]>>>,
 }
 
 impl NetworkTunnel {
@@ -45,6 +47,8 @@ impl NetworkTunnel {
             ip_to_id: Arc::new(RwLock::new(HashMap::new())),
             bytes_tx: Arc::new(AtomicU64::new(0)),
             bytes_rx: Arc::new(AtomicU64::new(0)),
+            host_socket: Arc::new(RwLock::new(None)),
+            active_session_key: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -72,6 +76,8 @@ impl NetworkTunnel {
 
         let bind_addr = format!("0.0.0.0:{}", port);
         let socket = Arc::new(UdpSocket::bind(&bind_addr).await?);
+        *self.host_socket.write() = Some(socket.clone());
+        *self.active_session_key.write() = Some(session_key);
         info!(
             "CoopLink Nœud Maître AEAD démarré sur UDP {} (Chiffrement ChaCha20-Poly1305 actif)",
             bind_addr
@@ -654,6 +660,14 @@ impl NetworkTunnel {
                                         *peers_map.write() = updated_peers;
                                     }
                                 }
+                                CoopPacket::Disconnect { reason, .. } => {
+                                    warn!("L'hôte s'est déconnecté du salon: {}", reason);
+                                    *conn_status_holder.write() = ConnectionStatus::Disconnected;
+                                    *last_err_holder.write() = Some(format!("Session fermée par l'hôte: {}", reason));
+                                    peers_map.write().clear();
+                                    *my_vip_holder.write() = None;
+                                    break;
+                                }
                                 _ => {}
                             }
                         }
@@ -720,13 +734,18 @@ impl NetworkTunnel {
             }
         });
 
-        // Ping périodique client -> serveur (uniquement une fois connecté)
+        // Ping périodique client -> serveur avec surveillance Heartbeat Timeout
         let running_ping = self.running.clone();
         let status_ping = self.conn_status.clone();
         let socket_ping = socket.clone();
+        let peers_ping = self.peers.clone();
+        let last_err_ping = self.last_error.clone();
+        let my_vip_ping = self.my_virtual_ip.clone();
 
         tokio::spawn(async move {
             let mut seq = 0u32;
+            let mut missed_pings = 0u32;
+
             while running_ping.load(Ordering::Relaxed) {
                 tokio::time::sleep(Duration::from_millis(1500)).await;
                 if *status_ping.read() == ConnectionStatus::Connected {
@@ -738,6 +757,23 @@ impl NetworkTunnel {
                     }
                     .encode_encrypted(&session_key);
                     let _ = socket_ping.send_to(&ping_pkt, server_addr).await;
+
+                    // Surveillance Heartbeat : si aucun paquet de l'Hôte n'a été reçu depuis plus de 4.5s
+                    let last_seen = peers_ping.read().get(&1).map(|p| p.last_seen_secs).unwrap_or(0);
+                    let now_secs = current_timestamp_secs();
+                    if last_seen > 0 && now_secs.saturating_sub(last_seen) > 4 {
+                        missed_pings += 1;
+                        if missed_pings >= 2 {
+                            warn!("Perte de connexion avec l'hôte (Timeout 4s) ! Déconnexion automatique de la session.");
+                            *status_ping.write() = ConnectionStatus::Disconnected;
+                            *last_err_ping.write() = Some("L'hôte s'est déconnecté du salon.".to_string());
+                            peers_ping.write().clear();
+                            *my_vip_ping.write() = None;
+                            break;
+                        }
+                    } else {
+                        missed_pings = 0;
+                    }
                 }
             }
         });
@@ -746,6 +782,24 @@ impl NetworkTunnel {
     }
 
     pub fn stop(&self) {
+        if *self.role.read() == NodeRole::Host {
+            if let Some(sock) = &*self.host_socket.read() {
+                if let Some(key) = &*self.active_session_key.read() {
+                    let disc = CoopPacket::Disconnect {
+                        peer_id: self.my_id,
+                        reason: "L'hôte a fermé la session".to_string(),
+                    }
+                    .encode_encrypted(key);
+
+                    for peer in self.peers.read().values() {
+                        if !peer.is_host {
+                            let _ = sock.try_send_to(&disc, peer.endpoint);
+                        }
+                    }
+                }
+            }
+        }
+
         self.running.store(false, Ordering::SeqCst);
         *self.role.write() = NodeRole::Idle;
         *self.conn_status.write() = ConnectionStatus::Disconnected;
@@ -754,6 +808,8 @@ impl NetworkTunnel {
         self.peers.write().clear();
         self.endpoint_to_id.write().clear();
         self.ip_to_id.write().clear();
+        *self.host_socket.write() = None;
+        *self.active_session_key.write() = None;
     }
 }
 

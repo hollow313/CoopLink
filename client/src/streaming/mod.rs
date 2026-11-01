@@ -68,7 +68,6 @@ impl StreamingEngine {
             if out.status.success() {
                 let text = String::from_utf8_lossy(&out.stdout);
                 let ignored_keywords = [
-                    "cooplink",
                     "param",
                     "settings",
                     "configur",
@@ -91,7 +90,10 @@ impl StreamingEngine {
                 for line in text.lines() {
                     let trimmed = line.trim();
                     let lower = trimmed.to_lowercase();
-                    let is_ignored = ignored_keywords.iter().any(|k| lower.contains(k));
+                    // On filtre la fenêtre principale CoopLink elle-même, mais on conserve les jeux de test et applications de jeux
+                    let is_cooplink_self = lower == "cooplink" || lower == "installation de cooplink" || lower.starts_with("cooplink v1.");
+                    let is_ignored = is_cooplink_self || ignored_keywords.iter().any(|k| lower.contains(k));
+
                     if !trimmed.is_empty()
                         && !is_ignored
                         && !trimmed.contains('\u{FFFD}')
