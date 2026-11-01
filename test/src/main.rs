@@ -6,7 +6,8 @@
 
 use eframe::egui::{self, Color32, FontId, Key, Pos2, Rect, RichText, Rounding, Stroke, Vec2};
 use parking_lot::Mutex;
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -88,15 +89,15 @@ impl XInputApi {
 const COLOR_BG: Color32 = Color32::from_rgb(15, 23, 42);
 const COLOR_CARD: Color32 = Color32::from_rgb(30, 41, 59);
 const COLOR_BORDER: Color32 = Color32::from_rgb(51, 65, 85);
-const COLOR_P1: Color32 = Color32::from_rgb(14, 165, 233); // Cyan / Bleu
-const COLOR_P2: Color32 = Color32::from_rgb(16, 185, 129); // Vert
-const COLOR_P3: Color32 = Color32::from_rgb(245, 158, 11); // Orange
-const COLOR_P4: Color32 = Color32::from_rgb(168, 85, 247); // Violet
+const COLOR_P1: Color32 = Color32::from_rgb(14, 165, 233); // Cyan / Bleu (Joueur 1)
+const COLOR_P2: Color32 = Color32::from_rgb(16, 185, 129); // Vert (Joueur 2)
+const COLOR_P3: Color32 = Color32::from_rgb(245, 158, 11); // Orange (Joueur 3)
+const COLOR_P4: Color32 = Color32::from_rgb(168, 85, 247); // Violet (Joueur 4)
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum PlayerRole {
-    HostPlayer1,  // Hôte (Joueur 1 - Bleu)
-    GuestPlayer2, // Invité (Joueur 2 - Vert)
+    HostPlayer1,  // Hôte (Joueur 1 - Boule Bleue)
+    GuestPlayer2, // Invité (Joueur 2 - Boule Verte)
 }
 
 #[derive(Clone)]
@@ -118,6 +119,8 @@ struct NetworkSyncState {
     last_peer_packet: Option<Instant>,
     local_cooplink_ip: Option<String>,
     last_activity_log: String,
+    rx_count: u64,
+    tx_count: u64,
 }
 
 fn detect_my_lan_ip() -> String {
@@ -129,6 +132,35 @@ fn detect_my_lan_ip() -> String {
         }
     }
     "127.0.0.1".to_string()
+}
+
+fn detect_my_public_ip_bg(holder: Arc<Mutex<Option<String>>>) {
+    thread::spawn(move || {
+        let endpoints = ["api.ipify.org:80", "ifconfig.me:80", "icanhazip.com:80"];
+        for ep in endpoints {
+            if let Ok(mut addrs) = ep.to_socket_addrs() {
+                if let Some(addr) = addrs.next() {
+                    if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(1500)) {
+                        let _ = stream.set_read_timeout(Some(Duration::from_millis(2000)));
+                        let host = ep.split(':').next().unwrap_or("api.ipify.org");
+                        let req = format!("GET / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", host);
+                        if stream.write_all(req.as_bytes()).is_ok() {
+                            let mut resp = String::new();
+                            if stream.read_to_string(&mut resp).is_ok() {
+                                if let Some(body) = resp.split("\r\n\r\n").nth(1) {
+                                    let ip = body.trim();
+                                    if !ip.is_empty() && ip.contains('.') {
+                                        *holder.lock() = Some(ip.to_string());
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
 }
 
 struct TestGameApp {
@@ -144,6 +176,7 @@ struct TestGameApp {
     current_role: PlayerRole,
     my_instance_id: u32,
     my_lan_ip: String,
+    my_public_ip: Arc<Mutex<Option<String>>>,
     custom_target_ip: String,
     last_auto_ping: Instant,
     network_sync: Arc<Mutex<NetworkSyncState>>,
@@ -170,6 +203,8 @@ impl TestGameApp {
         };
 
         let my_lan_ip = detect_my_lan_ip();
+        let my_public_ip = Arc::new(Mutex::new(None));
+        detect_my_public_ip_bg(my_public_ip.clone());
 
         let local_cooplink_ip = if UdpSocket::bind("10.244.0.1:0").is_ok() {
             Some("10.244.0.1".to_string())
@@ -187,7 +222,7 @@ impl TestGameApp {
 
         let network_sync = Arc::new(Mutex::new(NetworkSyncState {
             local_cooplink_ip: local_cooplink_ip.clone(),
-            last_activity_log: "Écoute UDP prête sur port 39999".to_string(),
+            last_activity_log: "Écoute UDP active sur port 39999".to_string(),
             ..Default::default()
         }));
 
@@ -201,7 +236,7 @@ impl TestGameApp {
             let sync_clone = network_sync.clone();
             let my_id = my_instance_id;
             thread::spawn(move || {
-                let mut buf = [0u8; 1024];
+                let mut buf = [0u8; 2048];
                 let _ = sock.set_read_timeout(Some(Duration::from_millis(300)));
 
                 loop {
@@ -223,6 +258,7 @@ impl TestGameApp {
                                 let peer_role = if parts.len() >= 3 { parts[2] } else { "Pair" };
 
                                 let mut st = sync_clone.lock();
+                                st.rx_count += 1;
                                 st.last_peer_packet = Some(Instant::now());
                                 st.peer_connected = true;
                                 st.peer_ip = src.ip().to_string();
@@ -252,34 +288,34 @@ impl TestGameApp {
             players: [
                 PlayerShip {
                     x: 120.0,
-                    y: 160.0,
+                    y: 130.0,
                     color: COLOR_P1,
                     name: "Joueur 1 (Hôte)",
                     last_btn: "-".to_string(),
                 },
                 PlayerShip {
                     x: 280.0,
-                    y: 160.0,
+                    y: 130.0,
                     color: COLOR_P2,
                     name: "Joueur 2 (Invité CoopLink)",
                     last_btn: "-".to_string(),
                 },
                 PlayerShip {
                     x: 440.0,
-                    y: 160.0,
+                    y: 130.0,
                     color: COLOR_P3,
                     name: "Joueur 3 (Manette #3)",
                     last_btn: "-".to_string(),
                 },
                 PlayerShip {
                     x: 600.0,
-                    y: 160.0,
+                    y: 130.0,
                     color: COLOR_P4,
                     name: "Joueur 4 (Manette #4)",
                     last_btn: "-".to_string(),
                 },
             ],
-            ball_pos: Pos2::new(360.0, 160.0),
+            ball_pos: Pos2::new(360.0, 130.0),
             ball_vel: Vec2::new(280.0, 190.0),
             start_time: Instant::now(),
             last_frame: Instant::now(),
@@ -289,6 +325,7 @@ impl TestGameApp {
             current_role: initial_role,
             my_instance_id,
             my_lan_ip,
+            my_public_ip,
             custom_target_ip: String::new(),
             last_auto_ping: Instant::now(),
             network_sync,
@@ -333,6 +370,7 @@ impl TestGameApp {
 
             for addr in self.resolve_targets() {
                 let _ = sock.send_to(msg.as_bytes(), addr);
+                self.network_sync.lock().tx_count += 1;
             }
         }
     }
@@ -347,6 +385,7 @@ impl TestGameApp {
 
             for addr in self.resolve_targets() {
                 let _ = sock.send_to(msg.as_bytes(), addr);
+                self.network_sync.lock().tx_count += 1;
             }
         }
     }
@@ -370,8 +409,8 @@ impl eframe::App for TestGameApp {
         let dt = (now - self.last_frame).as_secs_f32().min(0.05);
         self.last_frame = now;
 
-        // Envoi automatique d'un Ping toutes les 1.2s vers les cibles (notamment si IP ami entrée)
-        if self.last_auto_ping.elapsed().as_millis() >= 1200 {
+        // Ping automatique régulier
+        if self.last_auto_ping.elapsed().as_millis() >= 1000 {
             self.last_auto_ping = Instant::now();
             self.send_network_ping();
         }
@@ -384,7 +423,7 @@ impl eframe::App for TestGameApp {
             self.fps_timer = Instant::now();
         }
 
-        // Capture du clavier local
+        // Clavier local
         let mut pressed_now = Vec::new();
         ctx.input(|i| {
             if i.key_down(Key::Z) || i.key_down(Key::W) { pressed_now.push("Z".to_string()); }
@@ -467,29 +506,29 @@ impl eframe::App for TestGameApp {
                 }
             }
 
-            self.players[i].x = (self.players[i].x + dx * dt).clamp(20.0, 720.0);
-            self.players[i].y = (self.players[i].y + dy * dt).clamp(30.0, 260.0);
+            self.players[i].x = (self.players[i].x + dx * dt).clamp(30.0, 710.0);
+            self.players[i].y = (self.players[i].y + dy * dt).clamp(30.0, 220.0);
             if btn_text != "-" { self.players[i].last_btn = btn_text; }
         }
 
         self.ball_pos += self.ball_vel * dt;
-        if self.ball_pos.x <= 20.0 || self.ball_pos.x >= 720.0 { self.ball_vel.x = -self.ball_vel.x; }
-        if self.ball_pos.y <= 30.0 || self.ball_pos.y >= 260.0 { self.ball_vel.y = -self.ball_vel.y; }
+        if self.ball_pos.x <= 20.0 || self.ball_pos.x >= 710.0 { self.ball_vel.x = -self.ball_vel.x; }
+        if self.ball_pos.y <= 20.0 || self.ball_pos.y >= 220.0 { self.ball_vel.y = -self.ball_vel.y; }
 
         egui::CentralPanel::default().show(ctx, |ui| {
             // EN-TÊTE
             ui.horizontal(|ui| {
-                ui.heading(RichText::new("CoopLink Virtual Game Test").color(Color32::WHITE).size(17.0));
-                ui.add_space(8.0);
+                ui.heading(RichText::new("CoopLink Virtual Game Test").color(Color32::WHITE).size(16.0));
+                ui.add_space(6.0);
                 ui.label(RichText::new(format!("{:.0} FPS", self.fps_display)).color(COLOR_P2).strong());
-                ui.add_space(8.0);
+                ui.add_space(6.0);
                 let elapsed_ms = self.start_time.elapsed().as_millis();
                 ui.label(
                     RichText::new(format!("Chrono : {:02}:{:02}.{:03}", (elapsed_ms / 60000) % 60, (elapsed_ms / 1000) % 60, elapsed_ms % 1000))
                         .color(COLOR_P1)
                         .monospace()
                         .strong()
-                        .size(13.0),
+                        .size(12.5),
                 );
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -504,7 +543,7 @@ impl eframe::App for TestGameApp {
 
             ui.add_space(4.0);
 
-            // BANDEAU D'AIDE ET D'IP RÉSEAU LOCALE / DISTANTE
+            // BANDEAU DES ADRESSES IP (PUBLIQUE & LOCALE) — VISIBLES TOUT DE SUITE !
             egui::Frame::none()
                 .fill(COLOR_CARD)
                 .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
@@ -513,22 +552,33 @@ impl eframe::App for TestGameApp {
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Rôle :").strong().color(Color32::WHITE));
-                        if ui.selectable_label(self.current_role == PlayerRole::HostPlayer1, "🎮 Hôte (Joueur 1)").clicked() {
+                        if ui.selectable_label(self.current_role == PlayerRole::HostPlayer1, "🔵 Hôte (J1)").clicked() {
                             self.current_role = PlayerRole::HostPlayer1;
                         }
-                        if ui.selectable_label(self.current_role == PlayerRole::GuestPlayer2, "🕹 Invité (Joueur 2)").clicked() {
+                        if ui.selectable_label(self.current_role == PlayerRole::GuestPlayer2, "🟢 Invité (J2)").clicked() {
                             self.current_role = PlayerRole::GuestPlayer2;
                         }
 
-                        ui.add_space(10.0);
-                        ui.label(RichText::new(format!("📌 Votre IP sur ce PC : {}", self.my_lan_ip)).color(COLOR_P1).strong());
+                        ui.add_space(6.0);
+
+                        // IP Publique détectée
+                        let pub_ip_str = self.my_public_ip.lock().clone().unwrap_or_else(|| "Détection...".to_string());
+                        ui.label(RichText::new(format!("🌐 IP Publique : {}", pub_ip_str)).color(Color32::from_rgb(56, 189, 248)).strong());
+                        if pub_ip_str != "Détection..." {
+                            if ui.button("📋 Copier").clicked() {
+                                ui.output_mut(|o| o.copied_text = pub_ip_str.clone());
+                            }
+                        }
+
+                        ui.add_space(6.0);
+                        ui.label(RichText::new(format!("🏠 LAN : {}", self.my_lan_ip)).color(Color32::from_rgb(148, 163, 184)).size(11.0));
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let edit = ui.add(egui::TextEdit::singleline(&mut self.custom_target_ip).desired_width(140.0).hint_text("ex: 192.168.1.XX"));
+                            let edit = ui.add(egui::TextEdit::singleline(&mut self.custom_target_ip).desired_width(130.0).hint_text("IP publique de l'ami..."));
                             if edit.changed() {
                                 self.send_network_ping();
                             }
-                            ui.label(RichText::new("👉 IP de l'ami :").color(Color32::WHITE).strong());
+                            ui.label(RichText::new("👉 IP Ami :").color(Color32::WHITE).strong());
                         });
                     });
                 });
@@ -565,7 +615,7 @@ impl eframe::App for TestGameApp {
                             );
                         } else {
                             ui.label(
-                                RichText::new("⏳ En attente de l'autre PC. Indiquez 'Votre IP' à votre ami pour qu'il la tape dans 'IP de l'ami' !")
+                                RichText::new("⏳ En attente de l'ami. Donnez-lui votre '🌐 IP Publique' pour qu'il la tape dans '👉 IP Ami' !")
                                     .color(Color32::from_rgb(254, 215, 170))
                                     .size(12.5),
                             );
@@ -573,39 +623,53 @@ impl eframe::App for TestGameApp {
                     });
                 });
 
-            ui.add_space(6.0);
+            ui.add_space(4.0);
 
-            // 1. ARÈNE DU JEU 2D
-            let arena_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(ui.available_width(), 240.0));
+            // 1. ARÈNE DU JEU 2D (4 VRAIES BOULES RONDES TRÈS VISIBLES)
+            let arena_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(ui.available_width(), 230.0));
             let painter = ui.painter();
 
             painter.rect_filled(arena_rect, Rounding::same(10.0), Color32::from_rgb(10, 15, 30));
             painter.rect_stroke(arena_rect, Rounding::same(10.0), Stroke::new(1.5_f32, COLOR_BORDER));
 
+            // Balle de rebond interactive (rose)
             painter.circle_filled(
                 Pos2::new(arena_rect.min.x + self.ball_pos.x, arena_rect.min.y + self.ball_pos.y),
                 12.0,
                 Color32::from_rgb(236, 72, 153),
             );
 
+            let arena_w = arena_rect.width();
+            let arena_h = arena_rect.height();
+
+            // Rendu des 4 joueurs sous forme de superbes boules/sphères lumineuses
             for (idx, p) in self.players.iter().enumerate() {
-                let center = Pos2::new(arena_rect.min.x + p.x, arena_rect.min.y + p.y);
-                painter.rect_filled(Rect::from_center_size(center, Vec2::new(32.0, 32.0)), Rounding::same(8.0), p.color);
+                let center = Pos2::new(
+                    arena_rect.min.x + (p.x * arena_w / 740.0).clamp(24.0, arena_w - 24.0),
+                    arena_rect.min.y + (p.y * arena_h / 250.0).clamp(24.0, arena_h - 24.0),
+                );
+
+                // Halo lumineux
+                painter.circle_filled(center, 24.0, p.color.gamma_multiply(0.25));
+                // Boule pleine du joueur
+                painter.circle_filled(center, 18.0, p.color);
+                // Contour blanc très net
+                painter.circle_stroke(center, 18.0, Stroke::new(2.0_f32, Color32::WHITE));
 
                 let title = if idx == 0 {
-                    if self.current_role == PlayerRole::HostPlayer1 { "Joueur 1 (Vous - Hôte)" } else { "Joueur 1 (Hôte Distant)" }
+                    if self.current_role == PlayerRole::HostPlayer1 { "J1 (Vous - Bleu)" } else { "J1 (Hôte Distant)" }
                 } else if idx == 1 {
-                    if self.current_role == PlayerRole::GuestPlayer2 { "Joueur 2 (Vous - Invité)" } else { "Joueur 2 (Invité Distant)" }
+                    if self.current_role == PlayerRole::GuestPlayer2 { "J2 (Vous - Vert)" } else { "J2 (Invité Distant)" }
                 } else {
                     p.name
                 };
 
-                painter.text(Pos2::new(center.x, center.y - 22.0), egui::Align2::CENTER_CENTER, title, FontId::proportional(11.0), Color32::WHITE);
-                painter.text(Pos2::new(center.x, center.y + 22.0), egui::Align2::CENTER_CENTER, &p.last_btn, FontId::proportional(10.0), p.color);
+                painter.text(Pos2::new(center.x, center.y - 28.0), egui::Align2::CENTER_CENTER, title, FontId::proportional(11.5), Color32::WHITE);
+                painter.text(Pos2::new(center.x, center.y + 28.0), egui::Align2::CENTER_CENTER, &p.last_btn, FontId::proportional(11.0), p.color);
             }
 
             ui.allocate_rect(arena_rect, egui::Sense::hover());
-            ui.add_space(6.0);
+            ui.add_space(4.0);
 
             // 2. PANNEAU DE TOUCHES EN DIRECT
             ui.columns(2, |cols| {
@@ -621,11 +685,11 @@ impl eframe::App for TestGameApp {
                 egui::Frame::none()
                     .fill(COLOR_CARD)
                     .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
-                    .inner_margin(10.0)
+                    .inner_margin(8.0)
                     .rounding(Rounding::same(8.0))
                     .show(&mut cols[0], |ui| {
-                        ui.label(RichText::new(my_title).color(my_color).strong().size(13.0));
-                        ui.add_space(4.0);
+                        ui.label(RichText::new(my_title).color(my_color).strong().size(12.5));
+                        ui.add_space(3.0);
                         ui.horizontal(|ui| {
                             let keys = ["Z", "Q", "S", "D", "ESPACE"];
                             for &k in &keys {
@@ -634,16 +698,16 @@ impl eframe::App for TestGameApp {
                                 let txt_col = if active { Color32::WHITE } else { Color32::GRAY };
                                 egui::Frame::none()
                                     .fill(bg)
-                                    .inner_margin(egui::Margin::symmetric(9.0, 5.0))
+                                    .inner_margin(egui::Margin::symmetric(8.0, 4.0))
                                     .rounding(Rounding::same(6.0))
                                     .show(ui, |ui| {
                                         ui.label(RichText::new(k).color(txt_col).strong());
                                     });
                             }
                         });
-                        ui.add_space(4.0);
+                        ui.add_space(3.0);
                         let local_str = if self.my_keys_pressed.is_empty() { "Aucune touche pressée".to_string() } else { self.my_keys_pressed.join(" + ") };
-                        ui.label(RichText::new(format!("En direct : {}", local_str)).color(Color32::WHITE).size(11.5));
+                        ui.label(RichText::new(format!("En direct : {}", local_str)).color(Color32::WHITE).size(11.0));
                     });
 
                 let peer_title = match self.current_role {
@@ -658,11 +722,11 @@ impl eframe::App for TestGameApp {
                 egui::Frame::none()
                     .fill(COLOR_CARD)
                     .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
-                    .inner_margin(10.0)
+                    .inner_margin(8.0)
                     .rounding(Rounding::same(8.0))
                     .show(&mut cols[1], |ui| {
-                        ui.label(RichText::new(peer_title).color(peer_color).strong().size(13.0));
-                        ui.add_space(4.0);
+                        ui.label(RichText::new(peer_title).color(peer_color).strong().size(12.5));
+                        ui.add_space(3.0);
                         let peer_keys = net.peer_keys_pressed.clone();
                         ui.horizontal(|ui| {
                             let keys = ["Z", "Q", "S", "D", "ESPACE", "ENTREE"];
@@ -672,33 +736,33 @@ impl eframe::App for TestGameApp {
                                 let txt_col = if active { Color32::WHITE } else { Color32::GRAY };
                                 egui::Frame::none()
                                     .fill(bg)
-                                    .inner_margin(egui::Margin::symmetric(7.0, 5.0))
+                                    .inner_margin(egui::Margin::symmetric(7.0, 4.0))
                                     .rounding(Rounding::same(6.0))
                                     .show(ui, |ui| {
                                         ui.label(RichText::new(k).color(txt_col).strong());
                                     });
                             }
                         });
-                        ui.add_space(4.0);
+                        ui.add_space(3.0);
                         if !peer_keys.is_empty() {
-                            ui.label(RichText::new(format!("Reçues par le réseau : {}", peer_keys.join(" + "))).color(peer_color).strong().size(12.0));
+                            ui.label(RichText::new(format!("Reçues par le réseau : {}", peer_keys.join(" + "))).color(peer_color).strong().size(11.5));
                         } else {
-                            ui.label(RichText::new(&net.last_activity_log).color(Color32::from_rgb(148, 163, 184)).size(11.0));
+                            ui.label(RichText::new(format!("{} (TX: {}, RX: {})", net.last_activity_log, net.tx_count, net.rx_count)).color(Color32::from_rgb(148, 163, 184)).size(10.5));
                         }
                     });
             });
 
-            ui.add_space(6.0);
+            ui.add_space(4.0);
 
             // 3. TEST AUDIO DU JEU
             egui::Frame::none()
                 .fill(COLOR_CARD)
                 .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
-                .inner_margin(8.0)
+                .inner_margin(6.0)
                 .rounding(Rounding::same(8.0))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("🔊 Test Sonore :").color(COLOR_P3).strong().size(12.5));
+                        ui.label(RichText::new("🔊 Test Sonore :").color(COLOR_P3).strong().size(12.0));
                         ui.add_space(6.0);
                         if ui.button(RichText::new("Tir Laser (880 Hz)").strong()).clicked() {
                             self.play_test_beep(880, 100, "Tir Laser");
@@ -710,7 +774,7 @@ impl eframe::App for TestGameApp {
                             self.play_test_beep(1760, 200, "Victoire");
                         }
                         ui.add_space(8.0);
-                        ui.label(RichText::new(&self.sound_feedback).color(COLOR_P2).size(11.5));
+                        ui.label(RichText::new(&self.sound_feedback).color(COLOR_P2).size(11.0));
                     });
                 });
         });

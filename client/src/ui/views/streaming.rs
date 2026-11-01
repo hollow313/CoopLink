@@ -2,7 +2,7 @@ use crate::i18n::Language;
 use crate::streaming::capture_host::{AudioCaptureMode, HardwareEncoder, VirtualGamepadType};
 use crate::streaming::stream_viewer::{StreamDisplayMode, VideoCodec};
 use crate::streaming::{CoopInputMode, StreamingEngine, StreamingRoleTab};
-use crate::types::{AppState, NodeRole};
+use crate::types::AppState;
 use crate::ui::retro_theme::ModernTheme;
 use egui::{Color32, CursorIcon, RichText, Rounding, Stroke, Ui};
 
@@ -19,11 +19,8 @@ impl StreamingView {
         on_start_client_stream: &mut bool,
         on_stop_client_stream: &mut bool,
     ) {
-        if state.role == NodeRole::Host {
-            engine.role_tab = StreamingRoleTab::HostShareMyGame;
-        } else if state.role == NodeRole::Client {
-            engine.role_tab = StreamingRoleTab::GuestJoinFriendGame;
-        }
+        // N'importe quel participant au salon peut partager son jeu ou rejoindre celui d'un ami
+
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])

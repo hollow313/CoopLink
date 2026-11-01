@@ -86,15 +86,22 @@ impl CoopStreamViewer {
     }
 
     /// Lance le lecteur de flux vidéo P2P CoopLink vers l'IP virtuelle de l'Hôte
+    #[allow(dead_code)]
     pub fn start_stream(&mut self, host_virtual_ip: Ipv4Addr, app_name: &str) -> anyhow::Result<()> {
-        self.target_host_vip = host_virtual_ip;
+        self.start_stream_str(&host_virtual_ip.to_string(), app_name)
+    }
+
+    /// Lance le lecteur de flux vers n'importe quelle adresse IP cible (virtuelle, LAN ou publique)
+    pub fn start_stream_str(&mut self, host_str: &str, app_name: &str) -> anyhow::Result<()> {
+        if let Ok(ip) = host_str.parse::<Ipv4Addr>() {
+            self.target_host_vip = ip;
+        }
 
         let display_flag = match self.display_mode {
             StreamDisplayMode::EmbeddedWindowed => "--windowed",
             StreamDisplayMode::BorderlessFullscreen => "--borderless",
         };
 
-        let host_str = host_virtual_ip.to_string();
         let res_w = self.resolution_width.to_string();
         let res_h = self.resolution_height.to_string();
         let fps_str = self.fps.to_string();

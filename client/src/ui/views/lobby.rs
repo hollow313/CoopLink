@@ -246,7 +246,20 @@ fn render_connection_dashboard(
                 );
             });
 
-            ui.add_space(10.0);
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let pub_ip = state.public_ip.map(|ip| ip.to_string()).unwrap_or_else(|| "Détection IP en cours...".to_string());
+                let full_addr = format!("{}:{}", pub_ip, config.listen_port);
+                ui.label(RichText::new("🌐 Votre IP Publique (Internet) :").color(ModernTheme::BLUE_ELECTRIC).strong().size(13.0));
+                ui.label(RichText::new(&full_addr).color(ModernTheme::TEXT_PRIMARY).strong().size(13.0));
+                if state.public_ip.is_some() {
+                    if ui.button("📋 Copier mon IP et Port").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                        ui.output_mut(|o| o.copied_text = full_addr);
+                    }
+                }
+            });
+
+            ui.add_space(8.0);
             ui.label(
                 RichText::new(match lang {
                     Language::Fr => "Sécurité P2P Chiffrée : un joueur doit obligatoirement renseigner le Code du salon (et le mot de passe si configuré) pour être authentifié.",

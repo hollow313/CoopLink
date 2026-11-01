@@ -67,6 +67,8 @@ pub struct ActiveRoom {
     pub room_code: String,
     pub host_id: u64,
     pub host_name: String,
+    pub host_public_ip: String,
+    pub host_port: u16,
     pub created_at_secs: u64,
     pub client_count: usize,
     pub clients: Vec<ConnectedClient>,
@@ -299,6 +301,8 @@ impl ServerHub {
                 room_code: room_code.clone(),
                 host_id: client_id,
                 host_name: player_name.clone(),
+                host_public_ip: src_endpoint.ip().to_string(),
+                host_port: src_endpoint.port(),
                 created_at_secs: current_timestamp_secs(),
                 client_count: 0,
                 clients: Vec::new(),
@@ -432,6 +436,29 @@ impl ServerHub {
 
     pub fn get_total_ids_issued(&self) -> u64 {
         self.next_client_id.load(Ordering::Relaxed).saturating_sub(1001)
+    }
+
+    pub fn register_web_room(&self, room_code: &str, host_name: &str, public_ip: &str, port: u16) {
+        let mut rooms = self.rooms.write();
+        let client_id = self.next_client_id.fetch_add(1, Ordering::SeqCst);
+        let room = rooms.entry(room_code.to_string()).or_insert_with(|| ActiveRoom {
+            room_code: room_code.to_string(),
+            host_id: client_id,
+            host_name: host_name.to_string(),
+            host_public_ip: public_ip.to_string(),
+            host_port: port,
+            created_at_secs: current_timestamp_secs(),
+            client_count: 1,
+            clients: Vec::new(),
+        });
+        room.host_public_ip = public_ip.to_string();
+        room.host_port = port;
+        room.host_name = host_name.to_string();
+        self.total_tunnels_mounted_ever.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn lookup_room(&self, room_code: &str) -> Option<ActiveRoom> {
+        self.rooms.read().get(room_code).cloned()
     }
 }
 

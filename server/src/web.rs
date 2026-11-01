@@ -1,12 +1,13 @@
 use crate::config::ServerConfig;
 use crate::hub::{ServerHub, TelemetryPayload};
 use axum::{
-    extract::State,
-    http::{header, StatusCode},
+    extract::{Path, State},
+    http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Json},
     routing::{get, post},
     Router,
 };
+use serde::Deserialize;
 use serde_json::json;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -27,6 +28,9 @@ pub async fn start_web_server(hub: Arc<ServerHub>, config: ServerConfig) {
         .route("/logo.png", get(serve_logo))
         .route("/api/stats", get(get_stats_api))
         .route("/api/telemetry", post(post_telemetry_api))
+        .route("/api/myip", get(get_my_ip_api))
+        .route("/api/rooms/register", post(post_register_room_api))
+        .route("/api/rooms/:code", get(get_room_by_code_api))
         .with_state(state);
 
     // 1. Écoute HTTP sur le port 30024 (TCP) pour le Reverse Proxy https://cooplink.home-lh.ovh -> 30024
@@ -64,6 +68,81 @@ async fn serve_logo() -> impl IntoResponse {
         [(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=86400")],
         bytes.as_slice(),
     )
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RoomRegisterPayload {
+    pub room_code: String,
+    pub host_name: String,
+    pub port: u16,
+    pub public_ip: Option<String>,
+}
+
+fn extract_real_ip(headers: &HeaderMap) -> String {
+    if let Some(forwarded) = headers.get("x-forwarded-for") {
+        if let Ok(s) = forwarded.to_str() {
+            if let Some(first) = s.split(',').next() {
+                let trimmed = first.trim();
+                if !trimmed.is_empty() {
+                    return trimmed.to_string();
+                }
+            }
+        }
+    }
+    if let Some(real_ip) = headers.get("x-real-ip") {
+        if let Ok(s) = real_ip.to_str() {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    "127.0.0.1".to_string()
+}
+
+async fn get_my_ip_api(headers: HeaderMap) -> impl IntoResponse {
+    let ip = extract_real_ip(&headers);
+    Json(json!({ "ip": ip }))
+}
+
+async fn post_register_room_api(
+    State(state): State<WebState>,
+    headers: HeaderMap,
+    Json(payload): Json<RoomRegisterPayload>,
+) -> impl IntoResponse {
+    let client_ip = payload.public_ip.unwrap_or_else(|| extract_real_ip(&headers));
+    state.hub.register_web_room(&payload.room_code, &payload.host_name, &client_ip, payload.port);
+    info!(
+        "Salon enregistré via Web API : '{}' par '{}' -> {}:{}",
+        payload.room_code, payload.host_name, client_ip, payload.port
+    );
+    Json(json!({
+        "success": true,
+        "room_code": payload.room_code,
+        "host_public_ip": client_ip,
+        "host_port": payload.port
+    }))
+}
+
+async fn get_room_by_code_api(
+    State(state): State<WebState>,
+    Path(code): Path<String>,
+) -> impl IntoResponse {
+    if let Some(room) = state.hub.lookup_room(&code) {
+        Json(json!({
+            "found": true,
+            "room_code": room.room_code,
+            "host_name": room.host_name,
+            "host_public_ip": room.host_public_ip,
+            "host_port": room.host_port,
+            "client_count": room.client_count
+        }))
+    } else {
+        Json(json!({
+            "found": false,
+            "error": "Salon introuvable ou expiré"
+        }))
+    }
 }
 
 async fn post_telemetry_api(

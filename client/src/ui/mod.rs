@@ -70,6 +70,7 @@ pub struct CoopLinkApp {
     pub from_tunnel_bcast_rx: Option<mpsc::Receiver<(u16, Vec<u8>)>>,
     pub logo_texture: Option<TextureHandle>,
     pub interfaces_rx: Option<crossbeam_channel::Receiver<Vec<InterfaceMetricInfo>>>,
+    pub public_ip_rx: Option<crossbeam_channel::Receiver<Ipv4Addr>>,
     pub show_close_prompt_modal: bool,
     pub remember_close_choice: bool,
     pub show_welcome_tutorial: bool,
@@ -115,6 +116,13 @@ impl CoopLinkApp {
         state.firewall_ok = check_os_firewall_status();
         let logo_texture = load_embedded_logo(&cc.egui_ctx);
 
+        let (public_ip_tx, public_ip_rx) = crossbeam_channel::bounded(1);
+        std::thread::spawn(move || {
+            if let Some(ip) = crate::network::public_ip::fetch_public_ip_sync() {
+                let _ = public_ip_tx.send(ip);
+            }
+        });
+
         let mut app = Self {
             config,
             state,
@@ -137,6 +145,7 @@ impl CoopLinkApp {
             from_tunnel_bcast_rx: Some(from_tunnel_bcast_rx),
             logo_texture,
             interfaces_rx: None,
+            public_ip_rx: Some(public_ip_rx),
             show_close_prompt_modal: false,
             remember_close_choice: true,
             show_welcome_tutorial: first_tutorial_needed,
@@ -383,13 +392,21 @@ impl eframe::App for CoopLinkApp {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.state.room_code)
                             .hint_text("ex: COOP-7701")
-                            .desired_width(360.0),
+                            .desired_width(280.0),
                     );
                     if ui.button("Coller").clicked() {
                         let text = ctx.output(|o| o.copied_text.clone());
                         let trimmed = text.trim();
                         if trimmed.starts_with("COOP-") || trimmed.len() >= 4 {
                             self.state.room_code = trimmed.to_string();
+                        }
+                    }
+                    if ui.button("🔍 Détecter l'IP").on_hover_text("Trouve automatiquement l'IP de l'hôte via le code de salon").clicked() {
+                        let code = self.state.room_code.trim();
+                        if !code.is_empty() {
+                            if let Some((ip, port)) = resolve_room_endpoint(code) {
+                                self.config.remote_server_address = format!("{}:{}", ip, port);
+                            }
                         }
                     }
                 });
@@ -702,6 +719,13 @@ impl eframe::App for CoopLinkApp {
         self.state.unique_instance_id = self.telemetry.assigned_id.read().clone();
         self.state.central_server_connected = self.telemetry.server_connected.load(Ordering::Relaxed);
         self.sync_telemetry();
+
+        if let Some(ref rx) = self.public_ip_rx {
+            if let Ok(ip) = rx.try_recv() {
+                self.state.public_ip = Some(ip);
+                self.public_ip_rx = None;
+            }
+        }
 
         match self.upnp_mgr.lock().state().clone() {
             UpnpState::Active {
@@ -1041,8 +1065,16 @@ impl eframe::App for CoopLinkApp {
                     self.add_log(LogLevel::Warning, "Partage de jeu arrêté.");
                 }
                 if on_start_client_stream {
-                    let host_vip = self.streaming_engine.stream_viewer.target_host_vip;
+                    let target_str = if let Some(peer) = self.state.peers.first() {
+                        peer.endpoint.ip().to_string()
+                    } else if let Ok(parsed) = self.config.remote_server_address.parse::<SocketAddr>() {
+                        parsed.ip().to_string()
+                    } else {
+                        self.streaming_engine.stream_viewer.target_host_vip.to_string()
+                    };
+
                     let my_vip = self.state.virtual_ip.unwrap_or(Ipv4Addr::new(10, 244, 0, 2));
+                    let host_vip = self.streaming_engine.stream_viewer.target_host_vip;
                     let req = self.streaming_engine.pairing.build_pair_request(
                         1002,
                         &self.config.player_name,
@@ -1063,12 +1095,12 @@ impl eframe::App for CoopLinkApp {
                     let _ = self
                         .streaming_engine
                         .stream_viewer
-                        .start_stream(host_vip, &app_name);
+                        .start_stream_str(&target_str, &app_name);
                     self.add_log(
                         LogLevel::Success,
                         &format!(
                             "Session de jeu partagé ouverte vers {} (Assigné : Joueur {}).",
-                            host_vip, slot
+                            target_str, slot
                         ),
                     );
                 }
@@ -1117,6 +1149,8 @@ impl CoopLinkApp {
 
         let tunnel = self.tunnel.clone();
         let bcast_relay = self.broadcast_relay.clone();
+        let r_code = room_code.clone();
+        let p_name = player_name.clone();
 
         self.rt.spawn(async move {
             let _ = bcast_relay.start(host_ip, to_tunnel_bcast_tx, from_bcast_net).await;
@@ -1148,6 +1182,33 @@ impl CoopLinkApp {
             ),
         );
 
+        // Enregistrement Web du salon sur https://cooplink.home-lh.ovh
+        let r_port = port;
+        let p_ip = self.state.public_ip.map(|ip| ip.to_string());
+        std::thread::spawn(move || {
+            use std::io::Write;
+            use std::net::ToSocketAddrs;
+            if let Ok(mut addrs) = "cooplink.home-lh.ovh:30024".to_socket_addrs() {
+                if let Some(addr) = addrs.next() {
+                    if let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(2500)) {
+                        let payload = serde_json::json!({
+                            "room_code": r_code,
+                            "host_name": p_name,
+                            "port": r_port,
+                            "public_ip": p_ip,
+                        });
+                        let json_str = payload.to_string();
+                        let req = format!(
+                            "POST /api/rooms/register HTTP/1.1\r\nHost: cooplink.home-lh.ovh\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            json_str.len(),
+                            json_str
+                        );
+                        let _ = stream.write_all(req.as_bytes());
+                    }
+                }
+            }
+        });
+
         if self.config.enable_upnp {
             self.state.upnp_status_text = "Recherche UPnP...".to_string();
             let upnp = self.upnp_mgr.clone();
@@ -1161,7 +1222,21 @@ impl CoopLinkApp {
     }
 
     fn start_client_node(&mut self) {
-        let server_str = self.config.remote_server_address.clone();
+        let mut server_str = self.config.remote_server_address.clone();
+        let room_code = self.state.room_code.trim().to_string();
+
+        // Résolution automatique par code de salon auprès du serveur central si 127.0.0.1 ou vide
+        if (server_str.contains("127.0.0.1") || server_str.is_empty()) && !room_code.is_empty() {
+            if let Some((resolved_ip, resolved_port)) = resolve_room_endpoint(&room_code) {
+                server_str = format!("{}:{}", resolved_ip, resolved_port);
+                self.config.remote_server_address = server_str.clone();
+                self.add_log(
+                    LogLevel::Success,
+                    &format!("Salon '{}' résolu sur l'IP hôte : {}", room_code, server_str),
+                );
+            }
+        }
+
         let server_addr: SocketAddr = match server_str.parse() {
             Ok(addr) => addr,
             Err(_) => match format!("{}:{}", server_str, self.config.listen_port).parse() {
@@ -1176,7 +1251,6 @@ impl CoopLinkApp {
         self.state.status = ConnectionStatus::Connecting;
         self.state.role = NodeRole::Client;
         let player_name = self.config.player_name.clone();
-        let room_code = self.state.room_code.trim().to_string();
         let room_password = self.config.room_password.trim().to_string();
 
         self.add_log(
@@ -1297,4 +1371,33 @@ fn tab_button(ui: &mut egui::Ui, current: &mut ActiveTab, tab: ActiveTab, label:
     if ui.add(btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
         *current = tab;
     }
+}
+
+pub fn resolve_room_endpoint(code: &str) -> Option<(String, u16)> {
+    use std::io::{Read, Write};
+    use std::net::{TcpStream, ToSocketAddrs};
+    let addrs = "cooplink.home-lh.ovh:30024".to_socket_addrs().ok()?;
+    for addr in addrs {
+        if let Ok(mut stream) = TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(2000)) {
+            let req = format!(
+                "GET /api/rooms/{} HTTP/1.1\r\nHost: cooplink.home-lh.ovh\r\nConnection: close\r\n\r\n",
+                code.trim()
+            );
+            if stream.write_all(req.as_bytes()).is_ok() {
+                let mut resp = String::new();
+                if stream.read_to_string(&mut resp).is_ok() {
+                    if let Some(body) = resp.split("\r\n\r\n").nth(1) {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
+                            if val["found"].as_bool() == Some(true) {
+                                let ip = val["host_public_ip"].as_str()?.to_string();
+                                let port = val["host_port"].as_u64()? as u16;
+                                return Some((ip, port));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
