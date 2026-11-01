@@ -545,7 +545,7 @@ impl NetworkTunnel {
         let auth_retry = auth_hex.clone();
 
         tokio::spawn(async move {
-            for attempt in 1..=3 {
+            for attempt in 1..=8 {
                 tokio::time::sleep(Duration::from_millis(1800)).await;
                 if !running_retry.load(Ordering::Relaxed) {
                     return;
@@ -553,7 +553,7 @@ impl NetworkTunnel {
                 if *status_retry.read() != ConnectionStatus::Connecting {
                     return;
                 }
-                if attempt < 3 {
+                if attempt < 8 {
                     let retry_pkt = CoopPacket::HandshakeRequest {
                         player_name: player_retry.clone(),
                         room_code: auth_retry.clone(),
