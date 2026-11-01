@@ -65,12 +65,26 @@ impl ViewerApp {
         let running_conn = running.clone();
 
         thread::spawn(move || {
-            let target_addr = format!("{}:47989", host_target);
+            let clean_host = host_target.split(':').next().unwrap_or(&host_target).trim().to_string();
+            let mut candidates = vec![
+                format!("{}:47989", clean_host),
+                "10.244.0.1:47989".to_string(),
+                "127.0.0.1:47989".to_string(),
+            ];
+            candidates.dedup();
+
             while running_conn.load(Ordering::Relaxed) {
-                if let Ok(mut stream) = TcpStream::connect_timeout(
-                    &target_addr.parse().unwrap_or_else(|_| "10.244.0.1:47989".parse().unwrap()),
-                    Duration::from_millis(2000),
-                ) {
+                let mut connected_stream = None;
+                for cand in &candidates {
+                    if let Ok(addr) = cand.parse::<SocketAddr>() {
+                        if let Ok(s) = TcpStream::connect_timeout(&addr, Duration::from_millis(1500)) {
+                            connected_stream = Some(s);
+                            break;
+                        }
+                    }
+                }
+
+                if let Some(mut stream) = connected_stream {
                     let _ = stream.set_nodelay(true);
                     state_stream.lock().connected_to_host = true;
 

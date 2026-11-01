@@ -47,7 +47,7 @@ impl UpnpManager {
         {
             if let Ok(local_ip) = get_local_lan_ip() {
                 let ps_cmd = format!(
-                    r#"try {{ $nat = New-Object -ComObject HNetCfg.NATUPnP; $maps = $nat.StaticPortMappingCollection; if ($maps) {{ $m = $maps | Where-Object {{ $_.ExternalPort -eq {0} -and $_.Protocol -eq 'UDP' }}; if (-not $m) {{ $maps.Add({0}, 'UDP', {0}, '{1}', $true, 'CoopLink Virtual LAN'); }} $ip = ($maps | Where-Object {{ $_.ExternalPort -eq {0} }}).ExternalIPAddress; if ($ip) {{ Write-Output $ip; exit 0 }} }} }} catch {{ }} exit 1"#,
+                    r#"try {{ $nat = New-Object -ComObject HNetCfg.NATUPnP; $maps = $nat.StaticPortMappingCollection; if ($maps) {{ if (-not ($maps | Where-Object {{ $_.ExternalPort -eq {0} -and $_.Protocol -eq 'UDP' }})) {{ $maps.Add({0}, 'UDP', {0}, '{1}', $true, 'CoopLink P2P Tunnel'); }} if (-not ($maps | Where-Object {{ $_.ExternalPort -eq 47989 -and $_.Protocol -eq 'TCP' }})) {{ $maps.Add(47989, 'TCP', 47989, '{1}', $true, 'CoopLink Stream TCP'); }} if (-not ($maps | Where-Object {{ $_.ExternalPort -eq 47989 -and $_.Protocol -eq 'UDP' }})) {{ $maps.Add(47989, 'UDP', 47989, '{1}', $true, 'CoopLink Stream UDP'); }} $ip = ($maps | Where-Object {{ $_.ExternalPort -eq {0} }}).ExternalIPAddress; if ($ip) {{ Write-Output $ip; exit 0 }} }} }} catch {{ }} exit 1"#,
                     port, local_ip
                 );
                 if let Ok(out) = crate::platform::windows::process::run_hidden_powershell(&ps_cmd) {
@@ -146,7 +146,7 @@ impl UpnpManager {
         #[cfg(windows)]
         if let Some(port) = self.mapped_port {
             let ps_cmd = format!(
-                r#"try {{ $nat = New-Object -ComObject HNetCfg.NATUPnP; $maps = $nat.StaticPortMappingCollection; if ($maps) {{ $maps.Remove({0}, 'UDP') }} }} catch {{ }}"#,
+                r#"try {{ $nat = New-Object -ComObject HNetCfg.NATUPnP; $maps = $nat.StaticPortMappingCollection; if ($maps) {{ $maps.Remove({0}, 'UDP'); $maps.Remove(47989, 'TCP'); $maps.Remove(47989, 'UDP') }} }} catch {{ }}"#,
                 port
             );
             let _ = crate::platform::windows::process::run_hidden_powershell(&ps_cmd);

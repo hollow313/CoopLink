@@ -1082,15 +1082,17 @@ impl eframe::App for CoopLinkApp {
                         Ipv4Addr::new(10, 244, 0, 2)
                     });
 
-                    // Cible en priorité l'IP virtuelle de l'autre pair dans le tunnel chiffré
-                    let target_vip = if let Some(peer) = self.state.peers.iter().find(|p| p.virtual_ip != my_cur_vip) {
-                        peer.virtual_ip
-                    } else if self.state.role == NodeRole::Client {
-                        self.config.host_virtual_ip
+                    // Cible en priorité l'adresse IP de l'hôte distant (IP publique ou LAN)
+                    let target_str = if let Some(peer) = self.state.peers.iter().find(|p| p.is_host) {
+                        peer.endpoint.ip().to_string()
+                    } else if let Some(peer) = self.state.peers.first() {
+                        peer.endpoint.ip().to_string()
+                    } else if let Ok(parsed) = self.config.remote_server_address.parse::<SocketAddr>() {
+                        parsed.ip().to_string()
                     } else {
-                        Ipv4Addr::new(10, 244, 0, 2)
+                        self.config.remote_server_address.split(':').next().unwrap_or("10.244.0.1").to_string()
                     };
-                    let target_str = target_vip.to_string();
+                    let target_vip = self.config.host_virtual_ip;
 
                     let my_vip = my_cur_vip;
                     let host_vip = target_vip;
@@ -1198,6 +1200,10 @@ impl CoopLinkApp {
                 host_ip
             ),
         );
+
+        // Démarre automatiquement le service de capture et streaming en tâche de fond
+        let app_target = self.streaming_engine.selected_app_name.clone();
+        let _ = self.streaming_engine.capture_host.start_daemon(host_ip, &app_target);
 
         if self.config.enable_upnp {
             self.state.upnp_status_text = "Recherche UPnP...".to_string();

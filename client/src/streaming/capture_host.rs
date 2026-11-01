@@ -404,6 +404,9 @@ impl CoopCaptureHost {
 
     /// Démarre le service de capture du jeu au premier plan lié à l'IP virtuelle CoopLink
     pub fn start_daemon(&mut self, host_virtual_ip: Ipv4Addr, target_game_exe: &str) -> anyhow::Result<()> {
+        if self.is_running {
+            return Ok(());
+        }
         self.bound_virtual_ip = host_virtual_ip;
         let conf_path = self.write_isolated_config(target_game_exe);
 
@@ -426,15 +429,28 @@ impl CoopCaptureHost {
             }
         }
 
+        let mut launched = false;
         for candidate in &exe_candidates {
             if candidate.exists() {
                 let conf_str = conf_path.to_string_lossy().to_string();
-                let _ = crate::platform::windows::process::spawn_hidden(
+                match crate::platform::windows::process::spawn_hidden(
                     &candidate.to_string_lossy(),
                     &[&conf_str],
-                );
-                break;
+                ) {
+                    Ok(_) => {
+                        info!("Service de capture vidéo démarré : {}", candidate.display());
+                        launched = true;
+                        break;
+                    }
+                    Err(e) => {
+                        warn!("Erreur lors du démarrage du service de capture sur {} : {}", candidate.display(), e);
+                    }
+                }
             }
+        }
+
+        if !launched {
+            warn!("Aucun exécutable cooplink-capture-service.exe trouvé dans les chemins candidats");
         }
 
         self.is_running = true;
