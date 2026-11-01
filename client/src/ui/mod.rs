@@ -17,7 +17,7 @@ use crate::streaming::StreamingEngine;
 use crate::types::{AppState, ConnectionStatus, LogEntry, LogLevel, NodeRole};
 use chrono::Local;
 use eframe::egui;
-use egui::{Color32, CursorIcon, RichText, TextureHandle};
+use egui::{Color32, CursorIcon, RichText, Rounding, TextureHandle};
 use logo::load_embedded_logo;
 use parking_lot::Mutex;
 use retro_theme::ModernTheme;
@@ -72,12 +72,15 @@ pub struct CoopLinkApp {
     pub interfaces_rx: Option<crossbeam_channel::Receiver<Vec<InterfaceMetricInfo>>>,
     pub show_close_prompt_modal: bool,
     pub remember_close_choice: bool,
+    pub show_welcome_tutorial: bool,
+    pub tutorial_step: usize,
 }
 
 impl CoopLinkApp {
     pub fn new(cc: &eframe::CreationContext<'_>, rt: Arc<Runtime>) -> Self {
         ModernTheme::apply(&cc.egui_ctx);
         let config = AppConfig::load();
+        let first_tutorial_needed = !config.first_launch_tutorial_done;
         let mut state = AppState::default();
 
         let (adapter, to_adapter_tx, from_net_rx) = NativeAdapter::new();
@@ -134,6 +137,8 @@ impl CoopLinkApp {
             interfaces_rx: None,
             show_close_prompt_modal: false,
             remember_close_choice: true,
+            show_welcome_tutorial: first_tutorial_needed,
+            tutorial_step: 0,
         };
 
         app.trigger_refresh_interfaces();
@@ -316,6 +321,168 @@ impl eframe::App for CoopLinkApp {
                     {
                         self.show_close_prompt_modal = false;
                     }
+                });
+            });
+        }
+
+        // Fenêtre d'accueil & Tutoriel interactif de premier lancement
+        if self.show_welcome_tutorial {
+            let lang = self.config.language;
+            egui::Window::new(match lang {
+                Language::Fr => "Bienvenue dans CoopLink — Guide de démarrage rapide",
+                Language::En => "Welcome to CoopLink — Quick Start Guide",
+                Language::Es => "Bienvenido a CoopLink — Guía de inicio rápido",
+                Language::De => "Willkommen bei CoopLink — Schnellanleitung",
+                Language::Pt => "Bem-vindo ao CoopLink — Guia de início rápido",
+            })
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .fixed_size(egui::vec2(540.0, 360.0))
+            .show(ctx, |ui| {
+                ui.add_space(8.0);
+                match self.tutorial_step {
+                    0 => {
+                        ui.horizontal(|ui| {
+                            ModernTheme::draw_dot(ui, ModernTheme::BLUE_ELECTRIC, 6.0);
+                            ui.label(
+                                RichText::new(match lang {
+                                    Language::Fr => "Étape 1 sur 3 — Créer ou Rejoindre un Salon",
+                                    Language::En => "Step 1 of 3 — Create or Join a Room",
+                                    _ => "Étape 1 sur 3 — Créer ou Rejoindre un Salon",
+                                })
+                                .color(ModernTheme::TEXT_PRIMARY)
+                                .strong()
+                                .size(16.5),
+                            );
+                        });
+                        ui.add_space(8.0);
+                        ui.label(
+                            RichText::new(match lang {
+                                Language::Fr => "• Si vous hébergez le jeu : cliquez sur « Créer et héberger le salon ». Transmettez votre adresse P2P directe et le Code du salon à votre ami.\n\n• Si vous rejoignez un ami : entrez l'adresse IP de l'hôte ainsi que le Code du salon dans le champ prévu puis cliquez sur « Rejoindre le salon ».\n\nUne fois connectés, vous êtes dans le même réseau virtuel chiffré (10.244.0.0/24).",
+                                Language::En => "• If hosting: Click 'Create & Host Room'. Share your direct P2P address and Room Code with your friend.\n\n• If joining: Enter your friend's IP address and the Room Code, then click 'Join Room'.\n\nOnce connected, you share a secure virtual LAN (10.244.0.0/24).",
+                                _ => "• Si vous hébergez : créez le salon et partagez le code.\n• Si vous rejoignez : entrez l'adresse et le code.",
+                            })
+                            .color(ModernTheme::TEXT_SECONDARY)
+                            .size(13.5),
+                        );
+                    }
+                    1 => {
+                        ui.horizontal(|ui| {
+                            ModernTheme::draw_dot(ui, ModernTheme::GREEN_VIVID, 6.0);
+                            ui.label(
+                                RichText::new(match lang {
+                                    Language::Fr => "Étape 2 sur 3 — Débit & Configuration Optimisée",
+                                    Language::En => "Step 2 of 3 — Speed Test & Auto-Optimization",
+                                    _ => "Étape 2 sur 3 — Débit & Configuration Optimisée",
+                                })
+                                .color(ModernTheme::TEXT_PRIMARY)
+                                .strong()
+                                .size(16.5),
+                            );
+                        });
+                        ui.add_space(8.0);
+                        ui.label(
+                            RichText::new(match lang {
+                                Language::Fr => "Dans l'onglet « Débit & Score Hôte », vous pouvez tester votre connexion :\n\n• Celui qui a la meilleure note sur 100 et un upload suffisant (> 20 Mbps) devrait héberger le salon.\n\n• Le bouton « Configuration Auto Optimisée » applique instantanément l'accélération matérielle GPU (NVENC/AMF) et la métrique prioritaire.",
+                                Language::En => "Under 'Speed & Host Score', run a connection test:\n\n• The player with the highest score out of 100 and sufficient upload (> 20 Mbps) should host.\n\n• 'Apply Auto-Optimized Config' activates GPU hardware encoding and network priority.",
+                                _ => "Testez votre connexion pour savoir qui doit héberger.",
+                            })
+                            .color(ModernTheme::TEXT_SECONDARY)
+                            .size(13.5),
+                        );
+                        ui.add_space(10.0);
+                        if ui.button(RichText::new("⚡ Appliquer la Configuration Optimisée maintenant").strong().color(ModernTheme::BLUE_ELECTRIC)).clicked() {
+                            let measured_upload = self.speedtest_mgr.last_result.as_ref().map(|r| r.upload_mbps).unwrap_or(50.0);
+                            self.streaming_engine.capture_host.apply_auto_optimized_profile(measured_upload);
+                            self.apply_low_metric();
+                            self.repair_firewall();
+                            self.add_log(LogLevel::Success, "Configuration Optimisée appliquée avec succès depuis le guide.");
+                        }
+                    }
+                    _ => {
+                        ui.horizontal(|ui| {
+                            ModernTheme::draw_dot(ui, ModernTheme::GREEN_VIVID, 6.0);
+                            ui.label(
+                                RichText::new(match lang {
+                                    Language::Fr => "Étape 3 sur 3 — Partage de Jeu & Pare-feu",
+                                    Language::En => "Step 3 of 3 — Game Sharing & Firewall",
+                                    _ => "Étape 3 sur 3 — Partage de Jeu & Pare-feu",
+                                })
+                                .color(ModernTheme::TEXT_PRIMARY)
+                                .strong()
+                                .size(16.5),
+                            );
+                        });
+                        ui.add_space(8.0);
+                        ui.label(
+                            RichText::new(match lang {
+                                Language::Fr => "• Onglet « Partage de Jeu & Manettes » : partagez la fenêtre du jeu au premier plan. Vos amis connectent leurs manettes (Joueur 2, 3, 4) sans écho vocal.\n\n• Onglet « Pare-feu » : vérifiez que vos règles sont au vert pour autoriser les flux directs.\n\nVous êtes prêt à jouer !",
+                                Language::En => "• 'Game Share & Controllers': Stream your active game window. Friends play with their gamepads without audio echo.\n\n• 'Firewall': Ensure rules are active for direct peer streaming.\n\nYou are ready to play!",
+                                _ => "Tout est prêt pour jouer en toute fluidité !",
+                            })
+                            .color(ModernTheme::TEXT_SECONDARY)
+                            .size(13.5),
+                        );
+                    }
+                }
+
+                ui.add_space(20.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    if self.tutorial_step > 0 {
+                        if ui.button(match lang {
+                            Language::Fr => "Précédent",
+                            Language::En => "Back",
+                            _ => "Précédent",
+                        }).clicked() {
+                            self.tutorial_step -= 1;
+                        }
+                    }
+
+                    if self.tutorial_step < 2 {
+                        let next_btn = egui::Button::new(RichText::new(match lang {
+                            Language::Fr => "Suivant",
+                            Language::En => "Next",
+                            _ => "Suivant",
+                        }).color(Color32::WHITE).strong())
+                        .fill(ModernTheme::BLUE_ELECTRIC)
+                        .rounding(Rounding::same(8.0))
+                        .min_size(egui::vec2(100.0, 32.0));
+
+                        if ui.add(next_btn).clicked() {
+                            self.tutorial_step += 1;
+                        }
+                    } else {
+                        let finish_btn = egui::Button::new(RichText::new(match lang {
+                            Language::Fr => "J'ai compris, commencer !",
+                            Language::En => "Got it, let's play!",
+                            _ => "Commencer !",
+                        }).color(Color32::WHITE).strong())
+                        .fill(ModernTheme::GREEN_VIVID)
+                        .rounding(Rounding::same(8.0))
+                        .min_size(egui::vec2(180.0, 32.0));
+
+                        if ui.add(finish_btn).clicked() {
+                            self.show_welcome_tutorial = false;
+                            self.config.first_launch_tutorial_done = true;
+                            let _ = self.config.save();
+                        }
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(match lang {
+                            Language::Fr => "Passer le guide",
+                            Language::En => "Skip guide",
+                            _ => "Passer",
+                        }).clicked() {
+                            self.show_welcome_tutorial = false;
+                            self.config.first_launch_tutorial_done = true;
+                            let _ = self.config.save();
+                        }
+                    });
                 });
             });
         }

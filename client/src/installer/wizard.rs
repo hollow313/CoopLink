@@ -106,6 +106,7 @@ pub struct InstallerApp {
     status_shared: Arc<parking_lot::Mutex<String>>,
     install_started: Arc<AtomicBool>,
     install_complete: Arc<AtomicBool>,
+    #[allow(dead_code)]
     error_msg: Option<String>,
     logo_texture: Option<egui::TextureHandle>,
 }
@@ -181,63 +182,57 @@ impl eframe::App for InstallerApp {
             .frame(
                 egui::Frame::none()
                     .fill(WIN11_CARD)
-                    .inner_margin(egui::Margin::symmetric(22.0, 14.0))
+                    .inner_margin(egui::Margin::symmetric(24.0, 16.0))
                     .stroke(Stroke::new(1.0_f32, WIN11_BORDER)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     if let Some(ref logo) = self.logo_texture {
-                        ui.image((logo.id(), egui::vec2(40.0, 40.0)));
+                        ui.image((logo.id(), egui::vec2(42.0, 42.0)));
                     }
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                     ui.vertical(|ui| {
                         ui.label(
-                            RichText::new(match lang {
-                                InstallerLang::Fr => "Installation de CoopLink",
-                                InstallerLang::En => "CoopLink Setup Wizard",
-                                InstallerLang::Es => "Instalación de CoopLink",
-                                InstallerLang::De => "CoopLink Installation",
-                                InstallerLang::Pt => "Instalação do CoopLink",
-                            })
-                            .color(WIN11_TEXT_MAIN)
-                            .strong()
-                            .size(18.0),
+                            RichText::new("CoopLink")
+                                .color(WIN11_TEXT_MAIN)
+                                .strong()
+                                .size(20.0),
                         );
                         let step_subtitle = match self.step {
                             InstallStep::Welcome => match lang {
-                                InstallerLang::Fr => "Étape 1 sur 5 — Présentation & Bienvenue",
-                                InstallerLang::En => "Step 1 of 5 — Overview & Welcome",
-                                InstallerLang::Es => "Paso 1 de 5 — Presentación y Bienvenida",
-                                InstallerLang::De => "Schritt 1 von 5 — Übersicht & Willkommen",
-                                InstallerLang::Pt => "Passo 1 de 5 — Apresentação e Boas-vindas",
+                                InstallerLang::Fr => "Étape 1 / 5 — Présentation & Bienvenue",
+                                InstallerLang::En => "Step 1 / 5 — Overview & Welcome",
+                                InstallerLang::Es => "Paso 1 / 5 — Presentación y Bienvenida",
+                                InstallerLang::De => "Schritt 1 / 5 — Übersicht & Willkommen",
+                                InstallerLang::Pt => "Passo 1 / 5 — Apresentação e Boas-vindas",
                             },
                             InstallStep::License => match lang {
-                                InstallerLang::Fr => "Étape 2 sur 5 — Contrat de Licence & Limitation de Responsabilité",
-                                InstallerLang::En => "Step 2 of 5 — End-User License Agreement & Liability Disclaimer",
-                                InstallerLang::Es => "Paso 2 de 5 — Contrato de Licencia y Exención de Responsabilidad",
-                                InstallerLang::De => "Schritt 2 von 5 — Lizenzvertrag & Haftungsausschluss",
-                                InstallerLang::Pt => "Passo 2 de 5 — Contrato de Licença e Exclusão de Responsabilidade",
+                                InstallerLang::Fr => "Étape 2 / 5 — Contrat de Licence & Décharge de Responsabilité",
+                                InstallerLang::En => "Step 2 / 5 — End-User License Agreement & Liability Disclaimer",
+                                InstallerLang::Es => "Paso 2 / 5 — Contrato de Licencia y Exención de Responsabilidad",
+                                InstallerLang::De => "Schritt 2 / 5 — Lizenzvertrag & Haftungsausschluss",
+                                InstallerLang::Pt => "Passo 2 / 5 — Contrato de Licença e Exclusão de Responsabilidade",
                             },
                             InstallStep::Destination => match lang {
-                                InstallerLang::Fr => "Étape 3 sur 5 — Dossier de destination",
-                                InstallerLang::En => "Step 3 of 5 — Destination Folder",
-                                InstallerLang::Es => "Paso 3 de 5 — Carpeta de destino",
-                                InstallerLang::De => "Schritt 3 von 5 — Zielordner",
-                                InstallerLang::Pt => "Passo 3 de 5 — Pasta de destino",
+                                InstallerLang::Fr => "Étape 3 / 5 — Dossier d'installation",
+                                InstallerLang::En => "Step 3 / 5 — Destination Folder",
+                                InstallerLang::Es => "Paso 3 / 5 — Carpeta de destino",
+                                InstallerLang::De => "Schritt 3 / 5 — Zielordner",
+                                InstallerLang::Pt => "Passo 3 / 5 — Pasta de destino",
                             },
                             InstallStep::OptionsAndDrivers => match lang {
-                                InstallerLang::Fr => "Étape 4 sur 5 — Vérification GPU, Pilotes Virtuels & Pare-feu",
-                                InstallerLang::En => "Step 4 of 5 — GPU Check, Virtual Drivers & Windows Firewall",
-                                InstallerLang::Es => "Paso 4 de 5 — Verificación GPU, Controladores y Cortafuegos",
-                                InstallerLang::De => "Schritt 4 von 5 — GPU-Prüfung, Virtuelle Treiber & Firewall",
-                                InstallerLang::Pt => "Passo 4 de 5 — Verificação GPU, Controladores e Firewall",
+                                InstallerLang::Fr => "Étape 4 / 5 — Vérification Matérielle & Options",
+                                InstallerLang::En => "Step 4 / 5 — Hardware Check & Options",
+                                InstallerLang::Es => "Paso 4 / 5 — Verificación de Hardware y Opciones",
+                                InstallerLang::De => "Schritt 4 / 5 — Hardware-Prüfung & Optionen",
+                                InstallerLang::Pt => "Passo 4 / 5 — Verificação de Hardware e Opções",
                             },
                             InstallStep::Installing => match lang {
-                                InstallerLang::Fr => "Étape 5 sur 5 — Installation du logiciel et des pilotes...",
-                                InstallerLang::En => "Step 5 of 5 — Installing software and drivers...",
-                                InstallerLang::Es => "Paso 5 de 5 — Instalando software y controladores...",
-                                InstallerLang::De => "Schritt 5 von 5 — Software und Treiber werden installiert...",
-                                InstallerLang::Pt => "Passo 5 de 5 — A instalar software e controladores...",
+                                InstallerLang::Fr => "Étape 5 / 5 — Installation des fichiers et des services...",
+                                InstallerLang::En => "Step 5 / 5 — Installing software and services...",
+                                InstallerLang::Es => "Paso 5 / 5 — Instalando software y servicios...",
+                                InstallerLang::De => "Schritt 5 / 5 — Installation läuft...",
+                                InstallerLang::Pt => "Passo 5 / 5 — A instalar software e serviços...",
                             },
                             InstallStep::Finished => match lang {
                                 InstallerLang::Fr => "Installation terminée avec succès",
@@ -247,27 +242,28 @@ impl eframe::App for InstallerApp {
                                 InstallerLang::Pt => "Instalação concluída com sucesso",
                             },
                             InstallStep::Uninstalling => match lang {
-                                InstallerLang::Fr => "Désinstallation complète de CoopLink en cours...",
+                                InstallerLang::Fr => "Désinstallation complète en cours...",
                                 InstallerLang::En => "Uninstalling CoopLink...",
                                 _ => "Désinstallation en cours...",
                             },
                             InstallStep::UninstallFinished => match lang {
-                                InstallerLang::Fr => "Désinstallation terminée avec succès",
+                                InstallerLang::Fr => "Désinstallation terminée",
                                 InstallerLang::En => "Uninstallation completed",
                                 _ => "Désinstallation terminée",
                             },
                         };
                         ui.label(
                             RichText::new(step_subtitle)
-                                .color(WIN11_TEXT_SUB)
-                                .size(13.0),
+                                .color(WIN11_BLUE)
+                                .size(13.0)
+                                .strong(),
                         );
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         egui::ComboBox::from_id_salt("installer_lang_combo")
                             .selected_text(RichText::new(self.lang.code()).color(WIN11_BLUE).strong())
-                            .width(66.0)
+                            .width(70.0)
                             .show_ui(ui, |ui| {
                                 for &l in InstallerLang::all() {
                                     ui.selectable_value(&mut self.lang, l, l.label());
@@ -281,16 +277,16 @@ impl eframe::App for InstallerApp {
             .frame(
                 egui::Frame::none()
                     .fill(WIN11_CARD)
-                    .inner_margin(egui::Margin::symmetric(22.0, 12.0))
+                    .inner_margin(egui::Margin::symmetric(24.0, 14.0))
                     .stroke(Stroke::new(1.0_f32, WIN11_BORDER)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     draw_dot(ui, WIN11_GREEN, 4.0);
                     ui.label(
-                        RichText::new("CoopLink v1.0.0 — Windows 11")
+                        RichText::new("CoopLink v1.0.0 — Édition Officielle Windows 11")
                             .color(WIN11_TEXT_MUTED)
-                            .small(),
+                            .size(12.0),
                     );
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -312,11 +308,11 @@ impl eframe::App for InstallerApp {
                         match self.step {
                             InstallStep::Welcome => {
                                 let btn = egui::Button::new(
-                                    RichText::new(next_lbl).color(Color32::WHITE).strong(),
+                                    RichText::new(next_lbl).color(Color32::WHITE).strong().size(13.5),
                                 )
                                 .fill(WIN11_BLUE)
-                                .rounding(Rounding::same(6.0))
-                                .min_size(egui::vec2(105.0, 34.0));
+                                .rounding(Rounding::same(8.0))
+                                .min_size(egui::vec2(115.0, 36.0));
 
                                 if ui.add(btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                     self.step = InstallStep::License;
@@ -330,85 +326,86 @@ impl eframe::App for InstallerApp {
                                         } else {
                                             WIN11_TEXT_MUTED
                                         })
-                                        .strong(),
+                                        .strong()
+                                        .size(13.5),
                                 )
                                 .fill(if self.license_accepted {
                                     WIN11_BLUE
                                 } else {
                                     Color32::from_rgb(226, 232, 240)
                                 })
-                                .rounding(Rounding::same(6.0))
-                                .min_size(egui::vec2(105.0, 34.0));
+                                .rounding(Rounding::same(8.0))
+                                .min_size(egui::vec2(115.0, 36.0));
 
                                 if ui.add_enabled(self.license_accepted, next_btn).clicked() {
                                     self.step = InstallStep::Destination;
                                 }
 
-                                if ui.add_sized([100.0, 34.0], egui::Button::new(prev_lbl)).clicked() {
+                                if ui.add_sized([105.0, 36.0], egui::Button::new(prev_lbl)).clicked() {
                                     self.step = InstallStep::Welcome;
                                 }
                             }
                             InstallStep::Destination => {
                                 let btn = egui::Button::new(
-                                    RichText::new(next_lbl).color(Color32::WHITE).strong(),
+                                    RichText::new(next_lbl).color(Color32::WHITE).strong().size(13.5),
                                 )
                                 .fill(WIN11_BLUE)
-                                .rounding(Rounding::same(6.0))
-                                .min_size(egui::vec2(105.0, 34.0));
+                                .rounding(Rounding::same(8.0))
+                                .min_size(egui::vec2(115.0, 36.0));
 
                                 if ui.add(btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                     self.step = InstallStep::OptionsAndDrivers;
                                 }
 
-                                if ui.add_sized([100.0, 34.0], egui::Button::new(prev_lbl)).clicked() {
+                                if ui.add_sized([105.0, 36.0], egui::Button::new(prev_lbl)).clicked() {
                                     self.step = InstallStep::License;
                                 }
                             }
                             InstallStep::OptionsAndDrivers => {
                                 let install_lbl = match lang {
-                                    InstallerLang::Fr => "Installer",
-                                    InstallerLang::En => "Install",
-                                    InstallerLang::Es => "Instalar",
-                                    InstallerLang::De => "Installieren",
-                                    InstallerLang::Pt => "Instalar",
+                                    InstallerLang::Fr => "Installer maintenant",
+                                    InstallerLang::En => "Install Now",
+                                    InstallerLang::Es => "Instalar ahora",
+                                    InstallerLang::De => "Jetzt installieren",
+                                    InstallerLang::Pt => "Instalar agora",
                                 };
                                 let install_btn = egui::Button::new(
-                                    RichText::new(install_lbl).color(Color32::WHITE).strong(),
+                                    RichText::new(install_lbl).color(Color32::WHITE).strong().size(13.5),
                                 )
                                 .fill(WIN11_BLUE)
-                                .rounding(Rounding::same(6.0))
-                                .min_size(egui::vec2(120.0, 34.0));
+                                .rounding(Rounding::same(8.0))
+                                .min_size(egui::vec2(150.0, 36.0));
 
                                 if ui.add(install_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                     self.step = InstallStep::Installing;
                                     self.start_installation();
                                 }
 
-                                if ui.add_sized([100.0, 34.0], egui::Button::new(prev_lbl)).clicked() {
+                                if ui.add_sized([105.0, 36.0], egui::Button::new(prev_lbl)).clicked() {
                                     self.step = InstallStep::Destination;
                                 }
                             }
                             InstallStep::Installing => {
                                 ui.label(
-                                    RichText::new("Installation...")
+                                    RichText::new("Installation en cours...")
                                         .color(WIN11_BLUE)
                                         .strong(),
                                 );
                             }
                             InstallStep::Finished => {
                                 let finish_lbl = match lang {
-                                    InstallerLang::Fr => "Terminer",
-                                    InstallerLang::En => "Finish",
-                                    InstallerLang::Es => "Finalizar",
-                                    InstallerLang::De => "Fertigstellen",
-                                    InstallerLang::Pt => "Concluir",
+                                    InstallerLang::Fr => "Terminer et lancer CoopLink",
+                                    InstallerLang::En => "Finish & Launch CoopLink",
+                                    InstallerLang::Es => "Finalizar y Abrir",
+                                    InstallerLang::De => "Fertigstellen & Starten",
+                                    InstallerLang::Pt => "Concluir e Abrir",
                                 };
                                 let finish_btn = egui::Button::new(
-                                    RichText::new(finish_lbl).color(Color32::WHITE).strong(),
+                                    RichText::new(finish_lbl).color(Color32::WHITE).strong().size(13.5),
                                 )
                                 .fill(WIN11_GREEN)
-                                .rounding(Rounding::same(6.0))
-                                .min_size(egui::vec2(115.0, 34.0));
+                                .rounding(Rounding::same(8.0))
+                                .min_size(egui::vec2(190.0, 36.0));
 
                                 if ui.add(finish_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                     if self.launch_on_finish {
@@ -432,11 +429,11 @@ impl eframe::App for InstallerApp {
                             }
                             InstallStep::UninstallFinished => {
                                 let close_btn = egui::Button::new(
-                                    RichText::new("Fermer").color(Color32::WHITE).strong(),
+                                    RichText::new("Fermer").color(Color32::WHITE).strong().size(13.5),
                                 )
                                 .fill(WIN11_BLUE)
-                                .rounding(Rounding::same(6.0))
-                                .min_size(egui::vec2(110.0, 34.0));
+                                .rounding(Rounding::same(8.0))
+                                .min_size(egui::vec2(115.0, 36.0));
                                 if ui.add(close_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                                     std::process::exit(0);
                                 }
@@ -450,14 +447,14 @@ impl eframe::App for InstallerApp {
             .frame(
                 egui::Frame::none()
                     .fill(WIN11_BG)
-                    .inner_margin(22.0),
+                    .inner_margin(20.0),
             )
             .show(ctx, |ui| {
                 egui::Frame::none()
                     .fill(WIN11_CARD)
                     .stroke(Stroke::new(1.0_f32, WIN11_BORDER))
-                    .inner_margin(20.0)
-                    .rounding(Rounding::same(10.0))
+                    .inner_margin(22.0)
+                    .rounding(Rounding::same(12.0))
                     .show(ui, |ui| match self.step {
                         InstallStep::Welcome => self.render_welcome(ui),
                         InstallStep::License => self.render_license(ui),
@@ -486,107 +483,112 @@ impl InstallerApp {
         ui.vertical(|ui| {
             ui.label(
                 RichText::new(match lang {
-                    InstallerLang::Fr => "Jouez avec vos amis à distance comme si vous étiez dans le même salon",
-                    InstallerLang::En => "Play with friends remotely as if you were in the same living room",
-                    InstallerLang::Es => "Juega con tus amigos a distancia como si estuvieran en la misma sala",
-                    InstallerLang::De => "Spiele mit Freunden aus der Ferne wie im selben Wohnzimmer",
-                    InstallerLang::Pt => "Jogue com amigos à distância como se estivessem na mesma sala",
+                    InstallerLang::Fr => "Bienvenue dans l'assistant d'installation de CoopLink",
+                    InstallerLang::En => "Welcome to the CoopLink Setup Wizard",
+                    InstallerLang::Es => "Bienvenido al asistente de instalación de CoopLink",
+                    InstallerLang::De => "Willkommen beim CoopLink-Installationsassistenten",
+                    InstallerLang::Pt => "Bem-vindo ao assistente de instalação do CoopLink",
                 })
                 .color(WIN11_TEXT_MAIN)
                 .strong()
-                .size(16.5),
+                .size(17.0),
             );
             ui.add_space(6.0);
 
             ui.label(
                 RichText::new(match lang {
-                    InstallerLang::Fr => "CoopLink réunit deux technologies complémentaires dans une seule application sécurisée et sans configuration :",
-                    InstallerLang::En => "CoopLink combines two complementary gaming technologies in a single secure, zero-configuration application:",
-                    InstallerLang::Es => "CoopLink reúne dos tecnologías en una sola aplicación segura y sin configuración:",
-                    InstallerLang::De => "CoopLink vereint zwei Technologien in einer einzigen, sicheren Anwendung ohne Konfiguration:",
-                    InstallerLang::Pt => "O CoopLink reúne duas tecnologias numa única aplicação segura e sem configuração:",
+                    InstallerLang::Fr => "CoopLink permet d'interconnecter plusieurs ordinateurs à distance avec une sécurité de niveau entreprise et une latence ultra-faible :",
+                    InstallerLang::En => "CoopLink connects remote computers with enterprise-grade security and ultra-low latency:",
+                    InstallerLang::Es => "CoopLink conecta equipos a distancia con seguridad avanzada y latencia ultra baja:",
+                    InstallerLang::De => "CoopLink verbindet Computer aus der Ferne mit maximaler Sicherheit und minimaler Latenz:",
+                    InstallerLang::Pt => "O CoopLink liga computadores à distância com máxima segurança e ultra baixa latência:",
                 })
-                .color(WIN11_TEXT_SUB),
+                .color(WIN11_TEXT_SUB)
+                .size(13.5),
             );
 
-            ui.add_space(10.0);
+            ui.add_space(14.0);
 
             egui::Frame::none()
                 .fill(WIN11_SUBTLE)
                 .stroke(Stroke::new(1.0_f32, WIN11_BORDER))
-                .inner_margin(12.0)
-                .rounding(Rounding::same(8.0))
+                .inner_margin(16.0)
+                .rounding(Rounding::same(10.0))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        draw_dot(ui, WIN11_BLUE, 4.5);
+                        draw_dot(ui, WIN11_BLUE, 5.0);
                         ui.vertical(|ui| {
                             ui.label(
                                 RichText::new(match lang {
-                                    InstallerLang::Fr => "1. Réseau Local Virtuel Chiffré (LAN P2P Direct)",
-                                    InstallerLang::En => "1. Encrypted Virtual Local Network (Direct P2P LAN)",
-                                    InstallerLang::Es => "1. Red Local Virtual Cifrada (LAN P2P Directo)",
-                                    InstallerLang::De => "1. Verschlüsseltes Virtuelles LAN (Direktes P2P)",
-                                    InstallerLang::Pt => "1. Rede Local Virtual Encriptada (LAN P2P Direto)",
+                                    InstallerLang::Fr => "Réseau Local Virtuel Chiffré E2E (LAN P2P Direct)",
+                                    InstallerLang::En => "Encrypted E2E Virtual Local Network (Direct P2P LAN)",
+                                    InstallerLang::Es => "Red Local Virtual Cifrada E2E (LAN P2P Directo)",
+                                    InstallerLang::De => "Ende-zu-Ende verschlüsseltes Virtuelles LAN (P2P)",
+                                    InstallerLang::Pt => "Rede Local Virtual Encriptada E2E (LAN P2P Direto)",
                                 })
                                 .color(WIN11_BLUE)
-                                .strong(),
+                                .strong()
+                                .size(14.5),
                             );
+                            ui.add_space(2.0);
                             ui.label(
                                 RichText::new(match lang {
-                                    InstallerLang::Fr => "Reliez vos PC en connexion directe chiffrée (100% P2P) pour jouer à tous vos jeux multijoueurs LAN sans ouvrir manuellement les ports de votre box.",
-                                    InstallerLang::En => "Connect your PCs over an encrypted direct P2P tunnel to play any LAN multiplayer game without manual router port forwarding.",
-                                    InstallerLang::Es => "Conecta tus PCs directamente en P2P cifrado para jugar a cualquier juego LAN sin abrir puertos manualmente.",
-                                    InstallerLang::De => "Verbinde eure PCs direkt per verschlüsseltem P2P für alle LAN-Multiplayer-Spiele.",
-                                    InstallerLang::Pt => "Ligue os vossos PCs diretamente em P2P encriptado para jogar qualquer jogo LAN.",
+                                    InstallerLang::Fr => "Chiffrement ChaCha20-Poly1305 avec contrôle d'intégrité strict. Jouez à vos jeux multijoueurs LAN comme si vos ordinateurs étaient reliés par un câble réseau physique, sans aucune redirection de port.",
+                                    InstallerLang::En => "ChaCha20-Poly1305 authenticated encryption. Play LAN games as if your PCs were connected by a direct physical Ethernet cable, with zero manual router setup.",
+                                    InstallerLang::Es => "Cifrado ChaCha20-Poly1305. Juega a cualquier juego LAN como si estuvieran en la misma red local, sin configurar puertos.",
+                                    InstallerLang::De => "ChaCha20-Poly1305 Authentifizierung. Spiele alle LAN-Spiele ohne manuelle Portweiterleitung.",
+                                    InstallerLang::Pt => "Encriptação ChaCha20-Poly1305. Jogue qualquer jogo LAN sem configurar portas no router.",
                                 })
                                 .color(WIN11_TEXT_SUB)
-                                .size(12.5),
+                                .size(13.0),
                             );
                         });
                     });
 
-                    ui.add_space(8.0);
+                    ui.add_space(12.0);
 
                     ui.horizontal(|ui| {
-                        draw_dot(ui, WIN11_GREEN, 4.5);
+                        draw_dot(ui, WIN11_GREEN, 5.0);
                         ui.vertical(|ui| {
                             ui.label(
                                 RichText::new(match lang {
-                                    InstallerLang::Fr => "2. Partage de Jeu au Premier Plan & Manettes Co-op (Anti-Écho Audio)",
-                                    InstallerLang::En => "2. Foreground Game Share & Co-op Controllers (Audio Anti-Echo)",
-                                    InstallerLang::Es => "2. Juego Compartido y Mandos Co-op (Anti-Eco de Audio)",
-                                    InstallerLang::De => "2. Vordergrund-Spielfreigabe & Co-op Controller (Audio-Echo-Schutz)",
-                                    InstallerLang::Pt => "2. Partilha de Jogo e Comandos Co-op (Anti-Eco de Áudio)",
+                                    InstallerLang::Fr => "Partage de Jeu au Premier Plan & Manettes Co-op Virtuelles",
+                                    InstallerLang::En => "Foreground Game Stream & Virtual Multi-Gamepads",
+                                    InstallerLang::Es => "Juego Compartido y Mandos Co-op Virtuales",
+                                    InstallerLang::De => "Vordergrund-Spielfreigabe & Virtuelle Controller",
+                                    InstallerLang::Pt => "Partilha de Jogo e Comandos Virtuais Co-op",
                                 })
                                 .color(WIN11_GREEN)
-                                .strong(),
+                                .strong()
+                                .size(14.5),
                             );
+                            ui.add_space(2.0);
                             ui.label(
                                 RichText::new(match lang {
-                                    InstallerLang::Fr => "Partagez uniquement votre jeu actif au premier plan sans écho vocal : vos amis rejoignent votre partie avec leurs manettes (Joueur 2, 3, 4) ou leur clavier/souris.",
-                                    InstallerLang::En => "Stream only your active foreground game with zero voice echo: friends join with their gamepads (Player 2, 3, 4) or keyboard/mouse.",
-                                    InstallerLang::Es => "Transmite solo tu juego activo en primer plano sin eco de voz: tus amigos se unen con sus mandos o teclado/ratón.",
-                                    InstallerLang::De => "Übertrage nur dein aktives Spiel im Vordergrund ohne Sprach-Echo mit bis zu 4 Spielern.",
-                                    InstallerLang::Pt => "Transmita apenas o seu jogo em primeiro plano sem eco de voz com até 4 jogadores.",
+                                    InstallerLang::Fr => "Partagez exclusivement la fenêtre du jeu actif sans aucun écho audio du chat vocal. Vos amis jouent avec leurs manettes (Joueurs 2, 3, 4) ou leur clavier avec décodage matériel haute performance.",
+                                    InstallerLang::En => "Stream only the active game window with zero microphone or voice chat echo. Friends play with their controllers or keyboard with dedicated hardware decoding.",
+                                    InstallerLang::Es => "Transmite únicamente la ventana de juego activa sin eco de voz. Tus amigos se unen con sus mandos o teclado.",
+                                    InstallerLang::De => "Streame ausschließlich das aktive Spiel ohne Sprach-Echo. Freunde treten mit Controllern bei.",
+                                    InstallerLang::Pt => "Transmita apenas a janela ativa sem eco de voz. Amigos jogam com os comandos.",
                                 })
                                 .color(WIN11_TEXT_SUB)
-                                .size(12.5),
+                                .size(13.0),
                             );
                         });
                     });
                 });
 
-            ui.add_space(10.0);
+            ui.add_space(14.0);
             ui.label(
                 RichText::new(match lang {
-                    InstallerLang::Fr => "Cliquez sur « Suivant » pour lire le contrat de licence et vérifier vos pilotes.",
-                    InstallerLang::En => "Click 'Next' to review the license agreement and verify system drivers.",
-                    InstallerLang::Es => "Haz clic en « Siguiente » para continuar.",
-                    InstallerLang::De => "Klicke auf „Weiter“, um fortzufahren.",
-                    InstallerLang::Pt => "Clique em « Seguinte » para continuar.",
+                    InstallerLang::Fr => "Cliquez sur « Suivant » pour prendre connaissance du contrat de licence et de la décharge légale de responsabilité.",
+                    InstallerLang::En => "Click 'Next' to review the software license agreement and legal disclaimer.",
+                    InstallerLang::Es => "Haz clic en « Siguiente » para revisar el acuerdo legal y continuar.",
+                    InstallerLang::De => "Klicke auf „Weiter“, um die Lizenzvereinbarung einzusehen.",
+                    InstallerLang::Pt => "Clique em « Seguinte » para analisar o acordo legal.",
                 })
                 .color(WIN11_TEXT_MUTED)
-                .small(),
+                .size(12.5),
             );
         });
     }
@@ -596,79 +598,79 @@ impl InstallerApp {
         ui.vertical(|ui| {
             ui.label(
                 RichText::new(match lang {
-                    InstallerLang::Fr => "Contrat de Licence Utilisateur Final (CLUF) & Clause de Non-Responsabilité",
-                    InstallerLang::En => "End-User License Agreement (EULA) & Limitation of Liability",
-                    InstallerLang::Es => "Contrato de Licencia de Usuario Final y Exención de Responsabilidad",
-                    InstallerLang::De => "Endbenutzer-Lizenzvertrag (EULA) & Haftungsausschluss",
-                    InstallerLang::Pt => "Contrato de Licença de Utilizador Final e Exclusão de Responsabilidade",
+                    InstallerLang::Fr => "Contrat de Licence Logicielle & Limitation de Responsabilité",
+                    InstallerLang::En => "Software License Agreement & Limitation of Liability",
+                    InstallerLang::Es => "Contrato de Licencia y Exención de Responsabilidad",
+                    InstallerLang::De => "Software-Lizenzvertrag & Haftungsausschluss",
+                    InstallerLang::Pt => "Contrato de Licença e Exclusão de Responsabilidade",
                 })
                 .color(WIN11_TEXT_MAIN)
                 .strong()
-                .size(15.5),
+                .size(16.5),
             );
             ui.label(
                 RichText::new(match lang {
-                    InstallerLang::Fr => "Veuillez lire attentivement les clauses suivantes avant d'installer CoopLink :",
-                    InstallerLang::En => "Please read the following legal terms carefully before installing CoopLink:",
-                    InstallerLang::Es => "Por favor, lee atentamente los siguientes términos legales antes de instalar:",
-                    InstallerLang::De => "Bitte lies die folgenden rechtlichen Bedingungen sorgfältig durch:",
-                    InstallerLang::Pt => "Por favor, leia atentamente os seguintes termos legais antes de instalar:",
+                    InstallerLang::Fr => "Veuillez lire attentivement l'intégralité des clauses contractuelles ci-dessous avant de poursuivre :",
+                    InstallerLang::En => "Please read the following contractual clauses carefully before proceeding:",
+                    InstallerLang::Es => "Lee atentamente los términos del contrato antes de continuar:",
+                    InstallerLang::De => "Bitte lies die folgenden Vertragsbedingungen sorgfältig durch:",
+                    InstallerLang::Pt => "Leia atentamente as cláusulas contratuais antes de prosseguir:",
                 })
                 .color(WIN11_TEXT_SUB)
-                .small(),
+                .size(13.0),
             );
             ui.add_space(8.0);
 
             let eula_text = match lang {
                 InstallerLang::Fr => {
-                    "CONTRAT DE LICENCE LOGICIELLE ET D'EXONÉRATION DE RESPONSABILITÉ — COOPLINK\n\
-                     Copyright © 2026 Loic HUON. Tous droits réservés.\n\n\
-                     IMPORTANT — VEUILLEZ LIRE ATTENTIVEMENT : En installant, copiant ou utilisant le logiciel « CoopLink » (ci-après « le Logiciel »), vous acceptez sans réserve l'intégralité des dispositions du présent contrat.\n\n\
-                     ARTICLE 1 — PROPRIÉTÉ INTELLECTUELLE ET LICENCE D'UTILISATION\n\
-                     Le Logiciel, son code source, ses algorithmes de tunnelisation P2P, ses pilotes virtuels et son interface graphique sont la propriété exclusive de Loic HUON (ci-après « l'Éditeur »). L'Éditeur vous concède une licence personnelle, non exclusive, non transférable et révocable d'utilisation du Logiciel. Toute ingénierie inverse, décompilation, modification ou revente commerciale non autorisée est strictement interdite.\n\n\
-                     ARTICLE 2 — FOURNITURE « EN L'ÉTAT » ET ABSENCE TOTALE DE GARANTIE\n\
-                     Le Logiciel est fourni « TEL QUEL » (« AS IS »), sans aucune garantie expresse ou implicite de quelque nature que ce soit, incluant notamment toute garantie de bon fonctionnement ininterrompu, d'absence d'erreurs, de compatibilité matérielle ou logicielle, ou d'adéquation à un usage particulier. L'ensemble des risques liés à l'installation, aux performances et à l'utilisation du Logiciel repose exclusivement sur l'Utilisateur.\n\n\
-                     ARTICLE 3 — CLAUSE EXONÉRATOIRE ET LIMITATIVE DE RESPONSABILITÉ\n\
-                     DANS TOUTE LA MESURE PERMISE PAR LA LOI APPLICABLE, L'ÉDITEUR (LOIC HUON) DÉCLINE TOUTE RESPONSABILITÉ ET NE POURRA EN AUCUN CAS ÊTRE TENU RESPONSABLE DE QUELQUE DOMMAGE DIRECT, INDIRECT, ACCESSOIRE, SPÉCIAL, MATÉRIEL, LOGICIEL OU FINANCIER RÉSULTANT DE L'INSTALLATION, DE LA CONFIGURATION OU DE L'UTILISATION DU LOGICIEL, Y COMPRIS, SANS S'Y LIMITER :\n\
-                     a) Toute perte, corruption ou altération de données, de fichiers système ou de paramètres réseau (pare-feu, routage, UPnP, pilotes d'affichage ou de périphériques virtuels) ;\n\
-                     b) Tout dysfonctionnement matériel (carte graphique, processeur, périphériques, écrans) ou instabilité du système d'exploitation ;\n\
-                     c) Toute suspension, restriction ou bannissement de compte prononcé par un éditeur de jeu tiers ou une plateforme en ligne en raison de l'utilisation d'un réseau virtuel ou d'un périphérique émulé ;\n\
-                     d) Toute intrusion, attaque réseau, fuite d'adresse IP ou acte malveillant commis par un tiers ou un autre participant connecté à un salon P2P ;\n\
-                     e) Toute utilisation illicite, contrefaisante ou non conforme aux lois en vigueur effectuée par l'Utilisateur via le tunnel pair-à-pair.\n\n\
-                     ARTICLE 4 — RESPONSABILITÉ EXCLUSIVE DE L'UTILISATEUR\n\
-                     L'Utilisateur reconnaît être seul et unique responsable des personnes qu'il invite dans ses salons P2P, des applications et jeux qu'il partage, ainsi que du respect des droits de propriété intellectuelle des éditeurs de jeux tiers."
+                    "CONTRAT DE LICENCE UTILISATEUR FINAL (CLUF) ET DÉCHARGE DE RESPONSABILITÉ — COOPLINK\n\
+                     Éditeur : Loic HUON. Tous droits réservés.\n\n\
+                     AVERTISSEMENT LÉGAL IMPORTANT :\n\
+                     Le logiciel « CoopLink » est un outil technique d'interconnexion réseau virtuel poste à poste (Peer-to-Peer) et de capture d'affichage local. L'Éditeur met à disposition cet outil logiciel neutre et n'exerce aucun contrôle, direct ou indirect, sur les usages, transferts, contenus ou activités réalisés par les utilisateurs au moyen du logiciel.\n\n\
+                     ARTICLE 1 — EXCLUSION TOTALE DE RESPONSABILITÉ QUANT AUX USAGES DU LOGICIEL\n\
+                     L'Utilisateur est expressément informé et reconnaît que l'Éditeur décline toute responsabilité quant à l'utilisation qui est faite de CoopLink. L'Utilisateur assume l'entière, unique et exclusive responsabilité juridique, civile, pénale et matérielle de ses actions, y compris mais sans s'y limiter :\n\
+                     a) Toute transmission, partage ou diffusion de contenus, jeux, données ou fichiers protégés par des droits d'auteur, des brevets ou le droit de la propriété intellectuelle sans autorisation expresse de leurs ayants droit respectifs ;\n\
+                     b) Toute tentative de contournement d'accès, d'intrusion réseau, d'usurpation d'identité ou d'attaque informatique menée au travers ou à destination des tunnels de communication ;\n\
+                     c) Toute utilisation frauduleuse, illégale, immorale ou non conforme aux législations locales et internationales en vigueur ;\n\
+                     d) Tout non-respect des conditions d'utilisation imposées par des tiers (plateformes de jeux en ligne, éditeurs de logiciels ou fournisseurs d'accès à Internet).\n\n\
+                     ARTICLE 2 — FOURNITURE STRICTE « EN L'ÉTAT » (AS IS) SANS GARANTIE\n\
+                     Le Logiciel est fourni « EN L'ÉTAT », selon sa disponibilité, sans aucune garantie expresse, implicite ou légale de conformité, de pérennité, d'absence d'erreurs, de sécurité absolue ou d'adéquation à un besoin spécifique. L'Utilisateur assume l'intégralité des risques inhérents à l'installation d'adaptateurs réseau virtuels, aux règles de pare-feu et au streaming matériel.\n\n\
+                     ARTICLE 3 — LIMITATION DES DOMMAGES ET CLAUSE D'INDEMNISATION\n\
+                     En aucun cas l'Éditeur ne pourra être tenu responsable de préjudices directs, indirects, accessoires ou consécutifs (perte d'exploitation, altération de fichiers, pannes matérielles, blocages de compte tiers). L'Utilisateur s'engage à garantir, indemniser et dégager l'Éditeur de toute responsabilité en cas de réclamation, poursuite ou condamnation émanant de tiers ou d'autorités judiciaires du fait de ses propres agissements."
                 }
                 _ => {
-                    "END-USER LICENSE AGREEMENT (EULA) & LIMITATION OF LIABILITY — COOPLINK\n\
-                     Copyright © 2026 Loic HUON. All Rights Reserved.\n\n\
-                     IMPORTANT — PLEASE READ CAREFULLY: By installing, copying, or using the 'CoopLink' software (the 'Software'), you unconditionally agree to all terms of this Agreement.\n\n\
-                     SECTION 1 — INTELLECTUAL PROPERTY & LICENSE GRANT\n\
-                     The Software, its source code, P2P tunneling architecture, virtual drivers, and user interface are the exclusive property of Loic HUON (the 'Publisher'). Reverse engineering, decompilation, modification, or unauthorized commercial redistribution is strictly prohibited.\n\n\
-                     SECTION 2 — 'AS IS' PROVISION & NO WARRANTY\n\
-                     THE SOFTWARE IS PROVIDED 'AS IS' AND 'WITH ALL FAULTS', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT. THE ENTIRE RISK AS TO THE QUALITY, NETWORK SECURITY, AND PERFORMANCE OF THE SOFTWARE IS BORNE SOLELY BY THE USER.\n\n\
-                     SECTION 3 — COMPLETE DISCLAIMER & LIMITATION OF LIABILITY\n\
-                     TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE PUBLISHER (LOIC HUON) BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES WHATSOEVER ARISING OUT OF OR IN ANY WAY RELATED TO THE INSTALLATION OR USE OF THE SOFTWARE, INCLUDING WITHOUT LIMITATION:\n\
-                     a) Any loss or corruption of data, system files, or network configurations (firewall, UPnP, routing, virtual display or controller drivers);\n\
-                     b) Any hardware malfunction, GPU/CPU damage, or operating system instability;\n\
-                     c) Any account suspension, restriction, or ban issued by third-party game publishers or online services;\n\
-                     d) Any network intrusion, IP exposure, or malicious actions performed by third-party peers invited into a P2P room;\n\
-                     e) Any unlawful or unauthorized use of the Software by the User.\n\n\
-                     SECTION 4 — USER RESPONSIBILITY\n\
-                     The User acknowledges full and sole responsibility for the peers they connect with, the applications they share, and compliance with all applicable laws and third-party terms of service."
+                    "END-USER LICENSE AGREEMENT (EULA) AND LEGAL DISCLAIMER — COOPLINK\n\
+                     Publisher: Loic HUON. All Rights Reserved.\n\n\
+                     IMPORTANT LEGAL NOTICE:\n\
+                     'CoopLink' is a neutral networking utility providing peer-to-peer virtual tunneling and local display capture. The Publisher exercises no supervision, control, or monitoring over the activities, content, or data routed through the software by its users.\n\n\
+                     SECTION 1 — COMPLETE DISCLAIMER REGARDING USER CONDUCT AND USAGE\n\
+                     The User acknowledges and agrees that the Publisher disclaims any and all liability regarding how CoopLink is used. The User bears sole and exclusive legal, civil, and criminal responsibility for all actions performed using the software, including without limitation:\n\
+                     a) Any transmission, sharing, or distribution of copyrighted files, games, or intellectual property without authorization from legitimate rights holders;\n\
+                     b) Any unauthorized network access, spoofing, tampering, or malicious activity conducted across or against peer connections;\n\
+                     c) Any illegal, fraudulent, or non-compliant use under applicable local or international laws;\n\
+                     d) Any violation of third-party terms of service (such as game publisher EULAs or ISP contracts).\n\n\
+                     SECTION 2 — 'AS IS' PROVISION WITHOUT WARRANTIES\n\
+                     THE SOFTWARE IS DELIVERED 'AS IS' AND 'WITH ALL FAULTS', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. THE ENTIRE RISK AS TO INSTALLATION, VIRTUAL NETWORK ADAPTERS, FIREWALL MODIFICATIONS, AND STREAMING PERFORMANCE IS ASSUMED SOLELY BY THE USER.\n\n\
+                     SECTION 3 — INDEMNIFICATION\n\
+                     IN NO EVENT SHALL THE PUBLISHER BE LIABLE FOR ANY DAMAGES ARISING FROM SOFTWARE USE. THE USER AGREES TO INDEMNIFY AND HOLD HARMLESS THE PUBLISHER AGAINST ANY THIRD-PARTY CLAIMS OR PROCEEDINGS RESULTING FROM THE USER'S ACTIONS."
                 }
             };
 
-            ScrollArea::vertical()
-                .max_height(175.0)
-                .auto_shrink([false, false])
+            egui::Frame::none()
+                .fill(WIN11_SUBTLE)
+                .stroke(Stroke::new(1.0_f32, WIN11_BORDER))
+                .inner_margin(12.0)
+                .rounding(Rounding::same(8.0))
                 .show(ui, |ui| {
-                    egui::Frame::none()
-                        .fill(WIN11_SUBTLE)
-                        .stroke(Stroke::new(1.0_f32, WIN11_BORDER))
-                        .inner_margin(12.0)
-                        .rounding(Rounding::same(6.0))
+                    ScrollArea::vertical()
+                        .max_height(200.0)
+                        .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            ui.label(RichText::new(eula_text).color(WIN11_TEXT_MAIN).small());
+                            ui.label(
+                                RichText::new(eula_text)
+                                    .color(WIN11_TEXT_MAIN)
+                                    .size(12.5),
+                            );
                         });
                 });
 
@@ -676,14 +678,15 @@ impl InstallerApp {
             ui.checkbox(
                 &mut self.license_accepted,
                 RichText::new(match lang {
-                    InstallerLang::Fr => "J'ai lu et j'accepte sans réserve les termes du contrat de licence et la clause d'exonération de responsabilité",
-                    InstallerLang::En => "I have read and unconditionally accept the License Agreement and the Limitation of Liability",
-                    InstallerLang::Es => "He leído y acepto sin reservas el contrato de licencia y la exención de responsabilidad",
-                    InstallerLang::De => "Ich habe den Lizenzvertrag und den Haftungsausschluss gelesen und akzeptiere sie",
-                    InstallerLang::Pt => "Li e aceito sem reservas o contrato de licença e a cláusula de exclusão de responsabilidade",
+                    InstallerLang::Fr => "J'ai lu, compris et j'accepte sans réserve les termes du contrat et l'exonération totale de responsabilité de l'Éditeur.",
+                    InstallerLang::En => "I have read, understood, and accept the terms of agreement and complete limitation of publisher liability.",
+                    InstallerLang::Es => "He leído y acepto los términos del contrato y la exención total de responsabilidad.",
+                    InstallerLang::De => "Ich habe die Bedingungen gelesen und akzeptiere den vollständigen Haftungsausschluss.",
+                    InstallerLang::Pt => "Li e aceito os termos do contrato e a exclusão total de responsabilidade.",
                 })
                 .color(WIN11_TEXT_MAIN)
-                .strong(),
+                .strong()
+                .size(13.0),
             );
         });
     }
@@ -693,74 +696,88 @@ impl InstallerApp {
         ui.vertical(|ui| {
             ui.label(
                 RichText::new(match lang {
-                    InstallerLang::Fr => "Emplacement d'installation",
-                    InstallerLang::En => "Installation Folder",
-                    InstallerLang::Es => "Carpeta de instalación",
-                    InstallerLang::De => "Installationsort",
+                    InstallerLang::Fr => "Emplacement d'installation du logiciel",
+                    InstallerLang::En => "Installation Directory",
+                    InstallerLang::Es => "Ubicación de instalación",
+                    InstallerLang::De => "Installationsverzeichnis",
                     InstallerLang::Pt => "Local de instalação",
                 })
                 .color(WIN11_TEXT_MAIN)
                 .strong()
                 .size(16.5),
             );
+            ui.add_space(4.0);
             ui.label(
                 RichText::new(match lang {
-                    InstallerLang::Fr => "Sélectionnez le dossier dans lequel installer CoopLink :",
+                    InstallerLang::Fr => "Choisissez le répertoire de destination où CoopLink sera installé :",
                     InstallerLang::En => "Select the destination folder where CoopLink will be installed:",
-                    InstallerLang::Es => "Selecciona la carpeta donde instalar CoopLink:",
-                    InstallerLang::De => "Wähle den Ordner für die Installation von CoopLink:",
-                    InstallerLang::Pt => "Selecione a pasta onde instalar o CoopLink:",
+                    InstallerLang::Es => "Elige la carpeta donde se instalará CoopLink:",
+                    InstallerLang::De => "Wähle den Zielordner für CoopLink:",
+                    InstallerLang::Pt => "Escolha a pasta de destino para o CoopLink:",
                 })
-                .color(WIN11_TEXT_SUB),
+                .color(WIN11_TEXT_SUB)
+                .size(13.0),
             );
-            ui.add_space(14.0);
+            ui.add_space(12.0);
 
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Dossier :").color(WIN11_TEXT_MAIN).strong());
+                ui.label(RichText::new("Dossier :").color(WIN11_TEXT_MAIN).strong().size(13.0));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.install_dir)
-                        .desired_width((ui.available_width() - 8.0).max(200.0)),
+                        .desired_width(330.0),
                 );
-            });
-            ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| {
                 if ui
-                    .button("Dossier Program Files (Standard)")
-                    .on_hover_cursor(CursorIcon::PointingHand)
+                    .button(match lang {
+                        InstallerLang::Fr => "Parcourir...",
+                        InstallerLang::En => "Browse...",
+                        _ => "Parcourir...",
+                    })
                     .clicked()
                 {
-                    self.install_dir = get_default_install_dir().to_string_lossy().to_string();
-                }
-                if ui
-                    .button("Dossier Utilisateur (AppData Local)")
-                    .on_hover_cursor(CursorIcon::PointingHand)
-                    .clicked()
-                {
-                    self.install_dir = get_user_local_install_dir().to_string_lossy().to_string();
-                }
-                if ui
-                    .button("Parcourir...")
-                    .on_hover_cursor(CursorIcon::PointingHand)
-                    .clicked()
-                {
-                    if let Some(chosen) = browse_install_folder(&self.install_dir) {
-                        self.install_dir = chosen;
+                    if let Some(folder) = browse_install_folder(&self.install_dir) {
+                        self.install_dir = folder;
                     }
+                }
+                if ui.button("Program Files").clicked() {
+                    self.install_dir = get_default_install_dir().to_string_lossy().to_string();
                 }
             });
 
-            ui.add_space(10.0);
+            ui.add_space(16.0);
+
             egui::Frame::none()
                 .fill(WIN11_SUBTLE)
                 .stroke(Stroke::new(1.0_f32, WIN11_BORDER))
-                .inner_margin(12.0)
+                .inner_margin(14.0)
                 .rounding(Rounding::same(8.0))
                 .show(ui, |ui| {
-                    ui.label(RichText::new("Architecture logicielle complète installée :").strong().color(WIN11_BLUE));
-                    ui.label("• cooplink.exe & unins000.exe (Application principale & Désinstalleur)");
-                    ui.label("• bin\\ (cooplink-capture-service.exe, cooplink-stream-viewer.exe, moteurs DLL)");
-                    ui.label("• drivers\\ (Pilotes Bus Manettes 4 Joueurs, Affichage Virtuel & LAN P2P)");
-                    ui.label("• config\\, resources\\, locales\\, LICENSE.txt & README.txt");
+                    ui.label(
+                        RichText::new("Composants inclus dans l'installation standard :")
+                            .color(WIN11_BLUE)
+                            .strong()
+                            .size(13.5),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new("• cooplink.exe & unins000.exe (Application principale & Utilitaire de désinstallation)")
+                            .color(WIN11_TEXT_MAIN)
+                            .size(12.5),
+                    );
+                    ui.label(
+                        RichText::new("• bin\\ (Descripteurs des modules Capture 120 FPS, Stream Viewer & WASAPI Audio)")
+                            .color(WIN11_TEXT_MAIN)
+                            .size(12.5),
+                    );
+                    ui.label(
+                        RichText::new("• drivers\\ (Manifeste matériel, Bus Manettes 4 Joueurs & Adaptateur LAN Virtuel)")
+                            .color(WIN11_TEXT_MAIN)
+                            .size(12.5),
+                    );
+                    ui.label(
+                        RichText::new("• config\\ & resources\\ (Profils optimisés Métrique 5, Pare-feu, CLUF & Icônes HD)")
+                            .color(WIN11_TEXT_MAIN)
+                            .size(12.5),
+                    );
                 });
         });
     }
@@ -770,19 +787,29 @@ impl InstallerApp {
         ui.vertical(|ui| {
             ui.label(
                 RichText::new(match lang {
-                    InstallerLang::Fr => "Diagnostic Matériel GPU & Installation Automatique des Pilotes",
-                    InstallerLang::En => "GPU Hardware Check & Automatic Driver Installation",
-                    InstallerLang::Es => "Diagnóstico GPU e Instalación Automática de Controladores",
-                    InstallerLang::De => "GPU-Prüfung & Automatische Treiberinstallation",
-                    InstallerLang::Pt => "Diagnóstico GPU e Instalação Automática de Controladores",
+                    InstallerLang::Fr => "Options de configuration et pilotes recommandés",
+                    InstallerLang::En => "Setup Options & Recommended Drivers",
+                    InstallerLang::Es => "Opciones y controladores recomendados",
+                    InstallerLang::De => "Optionen & Empfohlene Treiber",
+                    InstallerLang::Pt => "Opções e controladores recomendados",
                 })
                 .color(WIN11_TEXT_MAIN)
                 .strong()
-                .size(16.0),
+                .size(16.5),
             );
-            ui.add_space(8.0);
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(match lang {
+                    InstallerLang::Fr => "Vérification automatique de l'accélération matérielle et configuration du système :",
+                    InstallerLang::En => "Automatic hardware acceleration detection and system setup:",
+                    _ => "Configuration automatique du système :",
+                })
+                .color(WIN11_TEXT_SUB)
+                .size(13.0),
+            );
+            ui.add_space(10.0);
 
-            // Encadré diagnostic matériel
+            // Carte de diagnostic matériel
             egui::Frame::none()
                 .fill(WIN11_SUBTLE)
                 .stroke(Stroke::new(1.0_f32, WIN11_BORDER))
@@ -790,176 +817,158 @@ impl InstallerApp {
                 .rounding(Rounding::same(8.0))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        draw_dot(ui, WIN11_GREEN, 4.0);
-                        ui.label(RichText::new(format!("Carte Graphique (GPU) détectée : {}", self.hw_check.gpu_name)).strong());
+                        draw_dot(ui, WIN11_GREEN, 4.5);
+                        ui.label(
+                            RichText::new(format!("GPU Détecté : {}", self.hw_check.gpu_name))
+                                .color(WIN11_TEXT_MAIN)
+                                .strong()
+                                .size(13.0),
+                        );
                     });
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        let col = if self.hw_check.gamepad_bus_present { WIN11_GREEN } else { WIN11_ORANGE };
-                        draw_dot(ui, col, 4.0);
-                        let txt = if self.hw_check.gamepad_bus_present {
-                            "Pilote Bus Manettes Virtuelles (Multi-Joueurs) : Déjà présent sur ce PC"
-                        } else {
-                            "Pilote Bus Manettes Virtuelles : Manquant — Sera installé automatiquement"
-                        };
-                        ui.label(RichText::new(txt).color(WIN11_TEXT_SUB));
-                    });
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        let col = if self.hw_check.virtual_display_present { WIN11_GREEN } else { WIN11_ORANGE };
-                        draw_dot(ui, col, 4.0);
-                        let txt = if self.hw_check.virtual_display_present {
-                            "Adaptateur d'Affichage & Capture DirectX 12 : Compatible et prêt"
-                        } else {
-                            "Adaptateur d'Affichage Virtuel : Sera configuré automatiquement"
-                        };
-                        ui.label(RichText::new(txt).color(WIN11_TEXT_SUB));
-                    });
+                    if let Some(ref vdd) = self.hw_check.virtual_display_adapter_name {
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(format!("Adaptateur d'affichage virtuel : {}", vdd))
+                                .color(WIN11_TEXT_SUB)
+                                .size(12.5),
+                        );
+                    }
                 });
 
-            ui.add_space(10.0);
+            ui.add_space(12.0);
 
             ui.checkbox(
-                &mut self.install_gamepad_driver,
+                &mut self.create_desktop_shortcut,
                 RichText::new(match lang {
-                    InstallerLang::Fr => "Installer / Mettre à jour le pilote Bus Manettes Virtuelles CoopLink (Recommandé pour jouer à 2-4)",
-                    InstallerLang::En => "Install / Update CoopLink Virtual Gamepad Bus Driver (Recommended for 2-4 players)",
-                    InstallerLang::Es => "Instalar controlador de Mandos Virtuales CoopLink (Recomendado)",
-                    InstallerLang::De => "CoopLink Virtuellen Controller-Treiber installieren (Empfohlen)",
-                    InstallerLang::Pt => "Instalar controlador de Comandos Virtuais CoopLink (Recomendado)",
+                    InstallerLang::Fr => "Créer un raccourci sur le Bureau",
+                    InstallerLang::En => "Create Desktop Shortcut",
+                    InstallerLang::Es => "Crear acceso directo en el Escritorio",
+                    InstallerLang::De => "Desktop-Verknüpfung erstellen",
+                    InstallerLang::Pt => "Criar atalho no Ambiente de Trabalho",
                 })
                 .color(WIN11_TEXT_MAIN)
-                .strong(),
+                .size(13.0),
             );
 
             ui.checkbox(
-                &mut self.install_virtual_display_driver,
+                &mut self.create_start_menu_shortcut,
                 RichText::new(match lang {
-                    InstallerLang::Fr => "Configurer l'Adaptateur d'Affichage Virtuel & Capture Premier Plan",
-                    InstallerLang::En => "Configure Virtual Display Adapter & Foreground Game Capture",
-                    InstallerLang::Es => "Configurar Adaptador de Pantalla Virtual y Captura de Juego",
-                    InstallerLang::De => "Virtuellen Anzeigeadapter & Spielaufnahme konfigurieren",
-                    InstallerLang::Pt => "Configurar Adaptador de Ecrã Virtual e Captura de Jogo",
+                    InstallerLang::Fr => "Ajouter CoopLink au Menu Démarrer",
+                    InstallerLang::En => "Add CoopLink to Start Menu",
+                    InstallerLang::Es => "Añadir al Menú Inicio",
+                    InstallerLang::De => "Zum Startmenü hinzufügen",
+                    InstallerLang::Pt => "Adicionar ao Menu Iniciar",
                 })
-                .color(WIN11_TEXT_MAIN),
+                .color(WIN11_TEXT_MAIN)
+                .size(13.0),
             );
 
             ui.checkbox(
                 &mut self.configure_firewall,
                 RichText::new(match lang {
-                    InstallerLang::Fr => "Configurer automatiquement le Pare-feu Windows Defender",
-                    InstallerLang::En => "Automatically configure Windows Defender Firewall rules",
-                    InstallerLang::Es => "Configurar automáticamente el Cortafuegos de Windows",
-                    InstallerLang::De => "Windows Defender Firewall automatisch konfigurieren",
-                    InstallerLang::Pt => "Configurar automaticamente a Firewall do Windows",
+                    InstallerLang::Fr => "Autoriser automatiquement le port UDP P2P (42422) dans le Pare-feu Windows",
+                    InstallerLang::En => "Automatically allow P2P UDP port (42422) in Windows Firewall",
+                    InstallerLang::Es => "Configurar reglas en el Cortafuegos de Windows",
+                    InstallerLang::De => "P2P-UDP-Port automatisch in der Windows-Firewall freigeben",
+                    InstallerLang::Pt => "Autorizar porta UDP na Firewall do Windows",
                 })
-                .color(WIN11_TEXT_MAIN),
+                .color(WIN11_TEXT_MAIN)
+                .size(13.0),
             );
 
             ui.checkbox(
-                &mut self.create_desktop_shortcut,
+                &mut self.launch_on_finish,
                 RichText::new(match lang {
-                    InstallerLang::Fr => "Créer un raccourci sur le Bureau et dans le Menu Démarrer",
-                    InstallerLang::En => "Create Desktop and Start Menu shortcuts",
-                    InstallerLang::Es => "Crear accesos directos en el Escritorio y Menú Inicio",
-                    InstallerLang::De => "Desktop- und Startmenü-Verknüpfungen erstellen",
-                    InstallerLang::Pt => "Criar atalhos no Ambiente de Trabalho e Menu Iniciar",
+                    InstallerLang::Fr => "Lancer CoopLink à la fin de l'installation",
+                    InstallerLang::En => "Launch CoopLink when setup finishes",
+                    InstallerLang::Es => "Iniciar CoopLink al finalizar",
+                    InstallerLang::De => "CoopLink nach der Installation starten",
+                    InstallerLang::Pt => "Iniciar o CoopLink ao concluir",
                 })
-                .color(WIN11_TEXT_MAIN),
+                .color(WIN11_TEXT_MAIN)
+                .size(13.0),
             );
         });
     }
 
     fn render_installing(&self, ui: &mut Ui) {
-        let is_unins = self.step == InstallStep::Uninstalling;
         ui.vertical_centered(|ui| {
-            ui.add_space(30.0);
+            ui.add_space(40.0);
+            ui.spinner();
+            ui.add_space(16.0);
             ui.label(
-                RichText::new(if is_unins {
-                    "Désinstallation de CoopLink et nettoyage des raccourcis en cours..."
-                } else {
-                    "Installation de CoopLink et des pilotes virtuels en cours..."
+                RichText::new(&self.status_label)
+                    .color(WIN11_TEXT_MAIN)
+                    .strong()
+                    .size(15.0),
+            );
+            ui.add_space(20.0);
+
+            let pct_val = (self.progress * 100.0).round() as u32;
+            let bar = egui::ProgressBar::new(self.progress)
+                .text(RichText::new(format!("{} %", pct_val)).color(Color32::WHITE).strong())
+                .animate(true);
+            ui.add_sized([420.0, 24.0], bar);
+            ui.add_space(40.0);
+        });
+    }
+
+    fn render_finished(&self, ui: &mut Ui) {
+        let lang = self.lang;
+        ui.vertical_centered(|ui| {
+            ui.add_space(24.0);
+            draw_dot(ui, WIN11_GREEN, 14.0);
+            ui.add_space(14.0);
+            ui.label(
+                RichText::new(match lang {
+                    InstallerLang::Fr => "CoopLink a été installé avec succès sur votre ordinateur",
+                    InstallerLang::En => "CoopLink has been successfully installed on your computer",
+                    InstallerLang::Es => "CoopLink se ha instalado con éxito en tu equipo",
+                    InstallerLang::De => "CoopLink wurde erfolgreich auf deinem PC installiert",
+                    InstallerLang::Pt => "O CoopLink foi instalado com sucesso no seu computador",
                 })
                 .color(WIN11_TEXT_MAIN)
                 .strong()
                 .size(17.0),
             );
-            ui.add_space(18.0);
-
-            let progress_bar = egui::ProgressBar::new(self.progress)
-                .show_percentage()
-                .animate(true)
-                .fill(if is_unins { WIN11_ORANGE } else { WIN11_BLUE });
-
-            ui.add_sized([ui.available_width() - 40.0, 22.0], progress_bar);
-
-            ui.add_space(14.0);
-            ui.label(RichText::new(&self.status_label).color(WIN11_TEXT_SUB));
-
-            if let Some(ref err) = self.error_msg {
-                ui.add_space(10.0);
-                ui.label(RichText::new(format!("Erreur : {}", err)).color(Color32::RED));
-            }
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(match lang {
+                    InstallerLang::Fr => "L'architecture logicielle, les profils de capture haute performance et les règles réseau sont configurés.",
+                    InstallerLang::En => "Software files, high performance capture profiles and networking rules are ready.",
+                    _ => "Tout est prêt pour démarrer vos sessions de jeu coopératif.",
+                })
+                .color(WIN11_TEXT_SUB)
+                .size(13.5),
+            );
+            ui.add_space(16.0);
+            ui.label(
+                RichText::new(format!("Emplacement : {}", self.install_dir))
+                    .color(WIN11_TEXT_MUTED)
+                    .size(12.5),
+            );
+            ui.add_space(24.0);
         });
     }
 
     fn render_uninstall_finished(&self, ui: &mut Ui) {
-        ui.vertical(|ui| {
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                draw_dot(ui, WIN11_GREEN, 5.5);
-                ui.label(
-                    RichText::new("CoopLink a été entièrement désinstallé")
-                        .color(WIN11_GREEN)
-                        .strong()
-                        .size(18.0),
-                );
-            });
-            ui.add_space(10.0);
-            ui.label(
-                RichText::new(
-                    "L'icône du Bureau, le raccourci du Menu Démarrer, les entrées du registre et tous les fichiers d'installation ont été supprimés.",
-                )
-                .color(WIN11_TEXT_SUB),
-            );
-        });
-    }
-
-    fn render_finished(&mut self, ui: &mut Ui) {
-        ui.vertical(|ui| {
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                draw_dot(ui, WIN11_GREEN, 5.5);
-                ui.label(
-                    RichText::new("CoopLink et ses pilotes ont été installés avec succès")
-                        .color(WIN11_GREEN)
-                        .strong()
-                        .size(18.0),
-                );
-            });
-            ui.add_space(10.0);
-
-            ui.label(
-                RichText::new(
-                    "Votre ordinateur est maintenant prêt. Tous les pilotes requis (Réseau P2P, Bus Manettes Virtuelles et Capture de Jeu au Premier Plan) sont opérationnels.",
-                )
-                .color(WIN11_TEXT_SUB),
-            );
-
-            ui.add_space(18.0);
-            ui.checkbox(
-                &mut self.launch_on_finish,
-                RichText::new("Lancer CoopLink maintenant")
-                    .color(WIN11_TEXT_MAIN)
-                    .strong(),
-            );
-
+        ui.vertical_centered(|ui| {
+            ui.add_space(30.0);
+            draw_dot(ui, WIN11_BLUE, 12.0);
             ui.add_space(12.0);
             ui.label(
-                RichText::new("Cliquez sur « Terminer » pour fermer l'assistant.")
-                    .color(WIN11_TEXT_MUTED)
-                    .small(),
+                RichText::new("CoopLink a été entièrement désinstallé de votre ordinateur")
+                    .color(WIN11_TEXT_MAIN)
+                    .strong()
+                    .size(16.0),
             );
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new("Tous les raccourcis du Bureau, les entrées du registre et les fichiers résiduels ont été supprimés.")
+                    .color(WIN11_TEXT_SUB)
+                    .size(13.0),
+            );
+            ui.add_space(30.0);
         });
     }
 
@@ -968,65 +977,54 @@ impl InstallerApp {
             return;
         }
 
-        self.progress_pct.store(5, Ordering::SeqCst);
-        *self.status_shared.lock() = "Étape 1/5 — Création de l'arborescence logicielle CoopLink...".to_string();
-
         let target_dir = PathBuf::from(&self.install_dir);
-        let create_desktop = self.create_desktop_shortcut;
-        let create_start = self.create_start_menu_shortcut;
-        let setup_firewall = self.configure_firewall;
-        let need_gamepad_drv = self.install_gamepad_driver && !self.hw_check.gamepad_bus_present;
-        let need_vdd_drv = self.install_virtual_display_driver;
-        let hw_info = self.hw_check.clone();
+        let current_exe = env::current_exe().unwrap_or_default();
+        let hw_check = self.hw_check.clone();
+
+        let desktop_sc = self.create_desktop_shortcut;
+        let start_sc = self.create_start_menu_shortcut;
+        let setup_fw = self.configure_firewall;
+        let bus_drv = self.install_gamepad_driver;
+        let disp_drv = self.install_virtual_display_driver;
+
         let complete_flag = self.install_complete.clone();
         let prog_pct = self.progress_pct.clone();
         let status_txt = self.status_shared.clone();
 
         thread::spawn(move || {
-            thread::sleep(Duration::from_millis(220));
-            prog_pct.store(20, Ordering::SeqCst);
-            *status_txt.lock() = "Étape 2/5 — Déploiement des binaires (cooplink.exe, services, moteurs DLL)...".to_string();
-
-            let current_exe = env::current_exe().unwrap_or_default();
-            let source_cooplink = current_exe
-                .parent()
-                .map(|p| p.join("cooplink.exe"))
-                .unwrap_or_else(|| PathBuf::from("cooplink.exe"));
+            prog_pct.store(10, Ordering::SeqCst);
+            *status_txt.lock() = "Création de l'arborescence logicielle...".to_string();
+            thread::sleep(Duration::from_millis(250));
 
             let effective_dir = populate_complete_software_tree(
                 &target_dir,
-                &source_cooplink,
                 &current_exe,
-                &hw_info,
+                &current_exe,
+                &hw_check,
             );
-            let target_exe = effective_dir.join("cooplink.exe");
+            let installed_exe = effective_dir.join("cooplink.exe");
 
+            prog_pct.store(35, Ordering::SeqCst);
+            *status_txt.lock() = "Initialisation des descripteurs de pilotes...".to_string();
             thread::sleep(Duration::from_millis(250));
-            prog_pct.store(48, Ordering::SeqCst);
-            *status_txt.lock() = "Étape 3/5 — Vérification et installation des pilotes virtuels (Bus Manettes & Affichage)...".to_string();
+            install_missing_drivers_silently(&effective_dir, bus_drv, disp_drv);
 
-            install_missing_drivers_silently(&effective_dir, need_gamepad_drv, need_vdd_drv);
-
-            thread::sleep(Duration::from_millis(220));
-            prog_pct.store(72, Ordering::SeqCst);
-            *status_txt.lock() = "Étape 4/5 — Création des raccourcis Bureau et Menu Démarrer...".to_string();
-
-            let _ = create_desktop_and_start_shortcuts(&target_exe, create_desktop, create_start);
-
-            thread::sleep(Duration::from_millis(220));
-            prog_pct.store(90, Ordering::SeqCst);
-            *status_txt.lock() = "Étape 5/5 — Configuration silencieuse du Pare-feu Windows & Registre...".to_string();
-
-            if setup_firewall {
-                let _ = setup_silent_firewall(&target_exe);
+            prog_pct.store(60, Ordering::SeqCst);
+            *status_txt.lock() = "Configuration des règles de pare-feu...".to_string();
+            thread::sleep(Duration::from_millis(200));
+            if setup_fw {
+                let _ = setup_silent_firewall(&installed_exe);
             }
 
-            let _ = register_in_windows_uninstall(&effective_dir, &target_exe);
+            prog_pct.store(80, Ordering::SeqCst);
+            *status_txt.lock() = "Création des raccourcis et inscription système...".to_string();
+            thread::sleep(Duration::from_millis(200));
+            let _ = create_desktop_and_start_shortcuts(&installed_exe, desktop_sc, start_sc);
+            let _ = register_in_windows_uninstall(&effective_dir, &installed_exe);
 
             prog_pct.store(100, Ordering::SeqCst);
-            *status_txt.lock() = "Installation terminée avec succès (100%) !".to_string();
-            thread::sleep(Duration::from_millis(260));
-
+            *status_txt.lock() = "Finalisation de l'installation (100%)...".to_string();
+            thread::sleep(Duration::from_millis(300));
             complete_flag.store(true, Ordering::SeqCst);
         });
     }
@@ -1035,8 +1033,6 @@ impl InstallerApp {
         if self.install_started.swap(true, Ordering::SeqCst) {
             return;
         }
-        self.progress_pct.store(15, Ordering::SeqCst);
-        *self.status_shared.lock() = "Suppression des raccourcis Bureau, Menu Démarrer et fichiers...".to_string();
 
         let complete_flag = self.install_complete.clone();
         let prog_pct = self.progress_pct.clone();
@@ -1044,11 +1040,11 @@ impl InstallerApp {
 
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(250));
-            prog_pct.store(55, Ordering::SeqCst);
-            *status_txt.lock() = "Suppression de l'icône du Bureau et nettoyage du registre...".to_string();
+            prog_pct.store(50, Ordering::SeqCst);
+            *status_txt.lock() = "Suppression des raccourcis et nettoyage des registres...".to_string();
             let _ = perform_complete_uninstall();
             prog_pct.store(100, Ordering::SeqCst);
-            *status_txt.lock() = "Désinstallation terminée (100%) !".to_string();
+            *status_txt.lock() = "Désinstallation terminée avec succès.".to_string();
             thread::sleep(Duration::from_millis(250));
             complete_flag.store(true, Ordering::SeqCst);
         });
@@ -1064,7 +1060,7 @@ fn setup_installer_theme(ctx: &egui::Context) {
     visuals.extreme_bg_color = WIN11_SUBTLE;
     visuals.override_text_color = Some(WIN11_TEXT_MAIN);
 
-    let rounding = Rounding::same(6.0);
+    let rounding = Rounding::same(8.0);
     visuals.widgets.noninteractive.bg_fill = WIN11_CARD;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, WIN11_BORDER);
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, WIN11_TEXT_MAIN);
@@ -1080,13 +1076,22 @@ fn setup_installer_theme(ctx: &egui::Context) {
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, WIN11_BLUE);
     visuals.widgets.hovered.rounding = rounding;
 
+    // Typographie nette, claire et professionnelle
+    style.text_styles.insert(
+        TextStyle::Heading,
+        FontId::new(17.0, FontFamily::Proportional),
+    );
     style.text_styles.insert(
         TextStyle::Body,
-        FontId::new(14.0, FontFamily::Proportional),
+        FontId::new(13.5, FontFamily::Proportional),
     );
     style.text_styles.insert(
         TextStyle::Button,
-        FontId::new(14.0, FontFamily::Proportional),
+        FontId::new(13.5, FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        TextStyle::Small,
+        FontId::new(12.0, FontFamily::Proportional),
     );
     style.interaction.selectable_labels = false;
     style.visuals = visuals;

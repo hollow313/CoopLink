@@ -45,6 +45,8 @@ pub struct AppConfig {
     pub start_with_windows: bool,
     pub room_password: String,
     pub scanline_intensity: f32,
+    #[serde(default)]
+    pub first_launch_tutorial_done: bool,
 }
 
 impl Default for AppConfig {
@@ -71,6 +73,7 @@ impl Default for AppConfig {
             start_with_windows: false,
             room_password: String::new(),
             scanline_intensity: 0.15,
+            first_launch_tutorial_done: false,
         }
     }
 }
