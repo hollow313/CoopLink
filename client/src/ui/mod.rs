@@ -935,6 +935,7 @@ impl eframe::App for CoopLinkApp {
                                     &mut self.state,
                                     &mut self.config,
                                     &self.tunnel,
+                                    &self.logs,
                                     &mut on_host_clicked,
                                     &mut on_join_clicked,
                                     &mut on_disconnect_clicked,
@@ -1127,7 +1128,7 @@ impl CoopLinkApp {
         self.add_log(
             LogLevel::Game,
             &format!(
-                "Création du salon chiffré AEAD '{}' (Port UDP P2P {})...",
+                "Création du salon chiffré AEAD '{}' (Port UDP P2P {}, Relais Zero-Knowledge actif sur cooplink.home-lh.ovh:30024)...",
                 room_code, port
             ),
         );
@@ -1215,7 +1216,7 @@ impl CoopLinkApp {
         self.add_log(
             LogLevel::Info,
             &format!(
-                "Négociation Handshake AEAD avec le salon '{}' ({})...",
+                "Négociation Handshake AEAD avec le salon '{}' (Direct: {}, Relais: cooplink.home-lh.ovh:30024)...",
                 room_code, server_addr
             ),
         );
@@ -1262,7 +1263,6 @@ impl CoopLinkApp {
         self.streaming_engine.capture_host.stop_daemon();
         self.streaming_engine.stream_viewer.stop_stream();
         self.upnp_mgr.lock().close_port();
-        self.state.public_ip = None;
         self.state.status = ConnectionStatus::Disconnected;
         self.state.role = NodeRole::Idle;
         self.state.virtual_ip = None;

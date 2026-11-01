@@ -14,6 +14,7 @@ impl LobbyView {
         state: &mut AppState,
         config: &mut AppConfig,
         _tunnel: &Arc<NetworkTunnel>,
+        logs: &[crate::types::LogEntry],
         on_host_clicked: &mut bool,
         on_join_clicked: &mut bool,
         on_disconnect_clicked: &mut bool,
@@ -23,7 +24,7 @@ impl LobbyView {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 // Bannière de statut moderne Windows 11 avec vraie pastille vectorielle
-                render_status_banner(ui, lang, state);
+                render_status_banner(ui, lang, state, logs);
 
                 ui.add_space(14.0);
 
@@ -48,7 +49,7 @@ impl LobbyView {
     }
 }
 
-fn render_status_banner(ui: &mut Ui, lang: Language, state: &AppState) {
+fn render_status_banner(ui: &mut Ui, lang: Language, state: &AppState, logs: &[crate::types::LogEntry]) {
     let (bg_color, status_text, dot_color, sub_text) = match state.status {
         ConnectionStatus::Hosting => (
             Color32::from_rgb(236, 253, 245),
@@ -159,6 +160,26 @@ fn render_status_banner(ui: &mut Ui, lang: Language, state: &AppState) {
                     );
                     ui.label(RichText::new(sub_text).color(ModernTheme::TEXT_SECONDARY).small());
                 });
+
+                if state.status == ConnectionStatus::Error {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let btn = egui::Button::new(
+                            RichText::new("📋 Copier le journal des logs")
+                                .color(Color32::WHITE)
+                                .strong(),
+                        )
+                        .fill(ModernTheme::RED_ERROR)
+                        .rounding(Rounding::same(8.0));
+                        if ui.add(btn).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                            let all_text = logs
+                                .iter()
+                                .map(|e| format!("{} [{:?}] {}", e.timestamp, e.level, e.message))
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            ui.output_mut(|o| o.copied_text = all_text);
+                        }
+                    });
+                }
             });
         });
 }

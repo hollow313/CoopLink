@@ -13,6 +13,8 @@ const PROTOCOL_MAGIC: &[u8; 4] = b"COOP";
 const PROTOCOL_VERSION: u8 = 1;
 const PKT_INSTANCE_HEARTBEAT: u8 = 0x10;
 const PKT_INSTANCE_ID_ASSIGNED: u8 = 0x11;
+pub const PKT_RELAY_REGISTER: u8 = 0x20;
+pub const PKT_RELAY_DATA: u8 = 0x21;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelemetryPayload {
@@ -82,6 +84,7 @@ pub struct ServerHub {
     pub clients_by_id: Arc<RwLock<HashMap<u64, ConnectedClient>>>,
     pub endpoint_to_id: Arc<RwLock<HashMap<SocketAddr, u64>>>,
     pub rooms: Arc<RwLock<HashMap<String, ActiveRoom>>>,
+    pub relay_rooms: Arc<RwLock<HashMap<String, Vec<(SocketAddr, u64)>>>>,
     pub total_bytes_tx: Arc<AtomicU64>,
     pub total_bytes_rx: Arc<AtomicU64>,
     pub total_packets_relayed: Arc<AtomicU64>,
@@ -98,6 +101,7 @@ impl ServerHub {
             clients_by_id: Arc::new(RwLock::new(HashMap::new())),
             endpoint_to_id: Arc::new(RwLock::new(HashMap::new())),
             rooms: Arc::new(RwLock::new(HashMap::new())),
+            relay_rooms: Arc::new(RwLock::new(HashMap::new())),
             total_bytes_tx: Arc::new(AtomicU64::new(0)),
             total_bytes_rx: Arc::new(AtomicU64::new(0)),
             total_packets_relayed: Arc::new(AtomicU64::new(0)),
@@ -155,10 +159,54 @@ impl ServerHub {
 
         let ptype = buf[5];
         match ptype {
-            // Enregistrement d'instance & Télémétrie (Attribution d'ID Unique + Métriques de Tunnels)
             PKT_INSTANCE_HEARTBEAT => {
                 if let Ok(payload) = serde_json::from_slice::<TelemetryPayload>(&buf[6..payload_len]) {
                     self.handle_instance_heartbeat(src_endpoint, payload, socket).await;
+                }
+            }
+            PKT_RELAY_REGISTER => {
+                let Some(&code_len_u8) = buf.get(6) else { return; };
+                let code_len = code_len_u8 as usize;
+                if 7 + code_len > payload_len { return; }
+                let Some(code_slice) = buf.get(7..7 + code_len) else { return; };
+                let room_code = String::from_utf8_lossy(code_slice).to_string();
+                let now = current_timestamp_secs();
+
+                let mut relay = self.relay_rooms.write();
+                let endpoints = relay.entry(room_code).or_default();
+                if let Some(entry) = endpoints.iter_mut().find(|(ep, _)| *ep == src_endpoint) {
+                    entry.1 = now;
+                } else {
+                    endpoints.push((src_endpoint, now));
+                }
+            }
+            PKT_RELAY_DATA => {
+                let Some(&code_len_u8) = buf.get(6) else { return; };
+                let code_len = code_len_u8 as usize;
+                if 7 + code_len > payload_len { return; }
+                let Some(code_slice) = buf.get(7..7 + code_len) else { return; };
+                let room_code = String::from_utf8_lossy(code_slice).to_string();
+                let now = current_timestamp_secs();
+
+                let targets: Vec<SocketAddr> = {
+                    let mut relay = self.relay_rooms.write();
+                    let endpoints = relay.entry(room_code).or_default();
+                    if let Some(entry) = endpoints.iter_mut().find(|(ep, _)| *ep == src_endpoint) {
+                        entry.1 = now;
+                    } else {
+                        endpoints.push((src_endpoint, now));
+                    }
+                    endpoints
+                        .iter()
+                        .filter(|(ep, _)| *ep != src_endpoint)
+                        .map(|(ep, _)| *ep)
+                        .collect()
+                };
+
+                for target in targets {
+                    self.total_packets_relayed.fetch_add(1, Ordering::Relaxed);
+                    self.total_bytes_tx.fetch_add(buf.len() as u64, Ordering::Relaxed);
+                    let _ = socket.send_to(buf, target).await;
                 }
             }
             // Handshake de salon P2P (avec vérification stricte des bornes pour empêcher tout crash distant)
@@ -379,6 +427,11 @@ impl ServerHub {
         self.instances_by_uuid
             .write()
             .retain(|_, inst| now.saturating_sub(inst.last_seen_secs) <= timeout_secs);
+
+        self.relay_rooms.write().retain(|_, eps| {
+            eps.retain(|(_, last)| now.saturating_sub(*last) <= 120);
+            !eps.is_empty()
+        });
 
         let mut to_remove = Vec::new();
         {

@@ -41,6 +41,20 @@ impl ConsoleView {
                             {
                                 *on_clear_clicked = true;
                             }
+
+                            if ui
+                                .button(RichText::new("📋 Copier tout le journal de logs").color(ModernTheme::BLUE_ELECTRIC).strong())
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text("Copie l'intégralité du journal d'activité dans le presse-papier pour l'envoyer au support")
+                                .clicked()
+                            {
+                                let all_text = logs
+                                    .iter()
+                                    .map(|e| format!("{} [{:?}] {}", e.timestamp, e.level, e.message))
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                ui.output_mut(|o| o.copied_text = all_text);
+                            }
                         });
                     });
 
