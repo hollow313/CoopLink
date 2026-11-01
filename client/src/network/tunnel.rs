@@ -5,7 +5,7 @@ use crate::types::{ConnectionStatus, NodeRole, PeerInfo};
 use anyhow::Result;
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -15,60 +15,6 @@ use tracing::{debug, error, info, warn};
 
 const MAX_AUTH_FAILURES_PER_WINDOW: u32 = 5;
 const AUTH_RATE_LIMIT_WINDOW_SECS: u64 = 30;
-
-const PROTOCOL_MAGIC: &[u8; 4] = b"COOP";
-const PKT_RELAY_REGISTER: u8 = 0x20;
-const PKT_RELAY_DATA: u8 = 0x21;
-
-pub fn encode_relay_packet(room_code: &str, encrypted_blob: &[u8]) -> Vec<u8> {
-    let code_bytes = room_code.as_bytes();
-    let mut pkt = Vec::with_capacity(12 + code_bytes.len() + encrypted_blob.len());
-    pkt.extend_from_slice(PROTOCOL_MAGIC);
-    pkt.push(PROTOCOL_VERSION);
-    pkt.push(PKT_RELAY_DATA);
-    pkt.push(code_bytes.len() as u8);
-    pkt.extend_from_slice(code_bytes);
-    pkt.extend_from_slice(encrypted_blob);
-    let crc = crc32fast::hash(&pkt);
-    pkt.extend_from_slice(&crc.to_be_bytes());
-    pkt
-}
-
-pub fn encode_relay_register(room_code: &str) -> Vec<u8> {
-    let code_bytes = room_code.as_bytes();
-    let mut pkt = Vec::with_capacity(12 + code_bytes.len());
-    pkt.extend_from_slice(PROTOCOL_MAGIC);
-    pkt.push(PROTOCOL_VERSION);
-    pkt.push(PKT_RELAY_REGISTER);
-    pkt.push(code_bytes.len() as u8);
-    pkt.extend_from_slice(code_bytes);
-    let crc = crc32fast::hash(&pkt);
-    pkt.extend_from_slice(&crc.to_be_bytes());
-    pkt
-}
-
-pub fn unwrap_relay_packet<'a>(buf: &'a [u8]) -> Option<&'a [u8]> {
-    if buf.len() < 12 || &buf[0..4] != PROTOCOL_MAGIC || buf[5] != PKT_RELAY_DATA {
-        return None;
-    }
-    let payload_len = buf.len() - 4;
-    let expected_crc = u32::from_be_bytes([
-        buf[payload_len],
-        buf[payload_len + 1],
-        buf[payload_len + 2],
-        buf[payload_len + 3],
-    ]);
-    if crc32fast::hash(&buf[..payload_len]) != expected_crc {
-        return None;
-    }
-    let code_len = buf[6] as usize;
-    let start = 7 + code_len;
-    if start <= payload_len {
-        Some(&buf[start..payload_len])
-    } else {
-        None
-    }
-}
 
 pub struct NetworkTunnel {
     pub running: Arc<AtomicBool>,
@@ -164,24 +110,7 @@ impl NetworkTunnel {
         let rx_counter = self.bytes_rx.clone();
         let tx_counter = self.bytes_tx.clone();
 
-        // Enregistrement périodique du salon auprès du relais central (cooplink.home-lh.ovh:30024)
-        let r_code_relay = room_code.clone();
-        let socket_relay = socket.clone();
-        let running_relay_reg = self.running.clone();
-        tokio::spawn(async move {
-            while running_relay_reg.load(Ordering::Relaxed) {
-                if let Ok(mut addrs) = "cooplink.home-lh.ovh:30024".to_socket_addrs() {
-                    if let Some(relay_addr) = addrs.next() {
-                        let pkt = encode_relay_register(&r_code_relay);
-                        let _ = socket_relay.send_to(&pkt, relay_addr).await;
-                    }
-                }
-                tokio::time::sleep(Duration::from_secs(10)).await;
-            }
-        });
-
         // Tâche de réception UDP principale (avec anti-spoofing, rate-limiting et AEAD)
-        let r_code_host_reply = room_code.clone();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 65535];
             let mut next_client_ip_suffix: u8 = 2; // Host = .1, Clients = .2, .3, .4 ...
@@ -205,13 +134,7 @@ impl NetworkTunnel {
                             }
                         }
 
-                        let raw_slice = if let Some(unwrapped) = unwrap_relay_packet(&buf[..len]) {
-                            unwrapped
-                        } else {
-                            &buf[..len]
-                        };
-
-                        let decoded = CoopPacket::decode_encrypted(raw_slice, &session_key);
+                        let decoded = CoopPacket::decode_encrypted(&buf[..len], &session_key);
                         let packet = match decoded {
                             Ok(pkt) => pkt,
                             Err(_) => {
@@ -312,12 +235,6 @@ impl NetworkTunnel {
                                 let encoded = resp.encode_encrypted(&session_key);
                                 tx_counter.fetch_add(encoded.len() as u64, Ordering::Relaxed);
                                 let _ = socket_rx.send_to(&encoded, src_endpoint).await;
-                                if let Ok(mut addrs) = "cooplink.home-lh.ovh:30024".to_socket_addrs() {
-                                    if let Some(relay_addr) = addrs.next() {
-                                        let relay_pkt = encode_relay_packet(&r_code_host_reply, &encoded);
-                                        let _ = socket_rx.send_to(&relay_pkt, relay_addr).await;
-                                    }
-                                }
 
                                 // Diffuse la mise à jour de la liste des pairs à tous les clients authentifiés
                                 let peer_list_json =
@@ -336,12 +253,6 @@ impl NetworkTunnel {
 
                                 for ep in client_endpoints {
                                     let _ = socket_rx.send_to(&update_pkt, ep).await;
-                                }
-                                if let Ok(mut addrs) = "cooplink.home-lh.ovh:30024".to_socket_addrs() {
-                                    if let Some(relay_addr) = addrs.next() {
-                                        let relay_pkt = encode_relay_packet(&r_code_host_reply, &update_pkt);
-                                        let _ = socket_rx.send_to(&relay_pkt, relay_addr).await;
-                                    }
                                 }
                             }
                             CoopPacket::Ping { seq, timestamp_ms } => {
@@ -623,26 +534,18 @@ impl NetworkTunnel {
             client_version: PROTOCOL_VERSION,
         }
         .encode_encrypted(&session_key);
-        let _ = socket.send_to(&req, server_addr).await;
+        socket.send_to(&req, server_addr).await?;
 
-        if let Ok(mut addrs) = "cooplink.home-lh.ovh:30024".to_socket_addrs() {
-            if let Some(relay_addr) = addrs.next() {
-                let relay_pkt = encode_relay_packet(&room_code, &req);
-                let _ = socket.send_to(&relay_pkt, relay_addr).await;
-            }
-        }
-
-        // Tâche de relance du Handshake si perte UDP et gestion du timeout (8 tentatives sur ~15s)
+        // Tâche de relance du Handshake si perte UDP et gestion du timeout (passe en Error si pas de réponse)
         let running_retry = self.running.clone();
         let status_retry = self.conn_status.clone();
         let err_retry = self.last_error.clone();
         let sock_retry = socket.clone();
         let player_retry = player_name.clone();
         let auth_retry = auth_hex.clone();
-        let r_code_client_retry = room_code.clone();
 
         tokio::spawn(async move {
-            for attempt in 1..=8 {
+            for attempt in 1..=3 {
                 tokio::time::sleep(Duration::from_millis(1800)).await;
                 if !running_retry.load(Ordering::Relaxed) {
                     return;
@@ -650,7 +553,7 @@ impl NetworkTunnel {
                 if *status_retry.read() != ConnectionStatus::Connecting {
                     return;
                 }
-                if attempt < 8 {
+                if attempt < 3 {
                     let retry_pkt = CoopPacket::HandshakeRequest {
                         player_name: player_retry.clone(),
                         room_code: auth_retry.clone(),
@@ -658,17 +561,10 @@ impl NetworkTunnel {
                     }
                     .encode_encrypted(&session_key);
                     let _ = sock_retry.send_to(&retry_pkt, server_addr).await;
-
-                    if let Ok(mut addrs) = "cooplink.home-lh.ovh:30024".to_socket_addrs() {
-                        if let Some(relay_addr) = addrs.next() {
-                            let relay_pkt = encode_relay_packet(&r_code_client_retry, &retry_pkt);
-                            let _ = sock_retry.send_to(&relay_pkt, relay_addr).await;
-                        }
-                    }
                 } else {
                     *status_retry.write() = ConnectionStatus::Error;
                     *err_retry.write() = Some(
-                        "Délai d'attente dépassé (15s). Vérifiez que l'Hôte a bien cliqué sur 'Créer et héberger le salon', que l'IP/Port sont exacts et que le Code de salon est identique.".to_string(),
+                        "Délai d'attente dépassé ou code/mot de passe de salon incorrect.".to_string(),
                     );
                 }
             }
@@ -682,27 +578,23 @@ impl NetworkTunnel {
         let last_err_holder = self.last_error.clone();
         let rx_counter = self.bytes_rx.clone();
 
-        // Tâche de réception client (vérifie direct P2P ou relais Zero-Knowledge + AEAD)
+        // Tâche de réception client (vérifie strictement src_endpoint == server_addr + AEAD)
         tokio::spawn(async move {
             let mut buf = vec![0u8; 65535];
             while running_flag.load(Ordering::Relaxed) {
                 match socket_rx.recv_from(&mut buf).await {
                     Ok((len, src_endpoint)) => {
-                        let raw_slice = if let Some(unwrapped) = unwrap_relay_packet(&buf[..len]) {
-                            unwrapped
-                        } else {
-                            if src_endpoint.ip() != server_addr.ip() {
-                                debug!(
-                                    "Paquet ignoré depuis une source IP non autorisée: {} (attendu: {})",
-                                    src_endpoint, server_addr
-                                );
-                                continue;
-                            }
-                            &buf[..len]
-                        };
+                        // Sécurité Client : Ignore tout paquet ne provenant pas de l'adresse du serveur hôte
+                        if src_endpoint != server_addr {
+                            debug!(
+                                "Paquet ignoré depuis une source tierce non autorisée: {} (attendu: {})",
+                                src_endpoint, server_addr
+                            );
+                            continue;
+                        }
 
                         rx_counter.fetch_add(len as u64, Ordering::Relaxed);
-                        if let Ok(packet) = CoopPacket::decode_encrypted(raw_slice, &session_key) {
+                        if let Ok(packet) = CoopPacket::decode_encrypted(&buf[..len], &session_key) {
                             match packet {
                                 CoopPacket::HandshakeResponse {
                                     success,
@@ -901,7 +793,6 @@ impl NetworkTunnel {
 
                     for peer in self.peers.read().values() {
                         if !peer.is_host {
-                            let _ = sock.try_send_to(&disc, peer.endpoint);
                             let _ = sock.try_send_to(&disc, peer.endpoint);
                         }
                     }

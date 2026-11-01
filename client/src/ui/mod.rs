@@ -1128,7 +1128,7 @@ impl CoopLinkApp {
         self.add_log(
             LogLevel::Game,
             &format!(
-                "Création du salon chiffré AEAD '{}' (Port UDP P2P {}, Relais Zero-Knowledge actif sur cooplink.home-lh.ovh:30024)...",
+                "Création du salon chiffré AEAD '{}' (Port UDP P2P {})...",
                 room_code, port
             ),
         );
@@ -1216,7 +1216,7 @@ impl CoopLinkApp {
         self.add_log(
             LogLevel::Info,
             &format!(
-                "Négociation Handshake AEAD avec le salon '{}' (Direct: {}, Relais: cooplink.home-lh.ovh:30024)...",
+                "Négociation Handshake AEAD avec le salon '{}' ({})...",
                 room_code, server_addr
             ),
         );
