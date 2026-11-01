@@ -719,20 +719,38 @@ impl eframe::App for CoopLinkApp {
             }
         }
 
-        match self.upnp_mgr.lock().state().clone() {
+        let upnp_state = self.upnp_mgr.lock().state().clone();
+        match upnp_state {
             UpnpState::Active {
                 external_ip,
                 mapped_port,
                 ..
             } => {
+                let was_not_active = !self.state.upnp_status_text.starts_with("Actif");
                 self.state.public_ip = Some(external_ip);
                 self.state.upnp_status_text = format!("Actif (UDP {})", mapped_port);
+                if was_not_active {
+                    self.add_log(
+                        LogLevel::Success,
+                        &format!(
+                            "NAT dynamique UPnP réussi ! Port UDP {} ouvert automatiquement sur la box internet.",
+                            mapped_port
+                        ),
+                    );
+                }
             }
             UpnpState::Searching => {
                 self.state.upnp_status_text = "Recherche UPnP...".to_string();
             }
             UpnpState::Failed { reason } => {
+                let was_not_failed = !self.state.upnp_status_text.starts_with("Échec");
                 self.state.upnp_status_text = format!("Échec ({})", reason);
+                if was_not_failed {
+                    self.add_log(
+                        LogLevel::Warning,
+                        &format!("Information UPnP IGD: {}", reason),
+                    );
+                }
             }
             UpnpState::Disabled => {
                 self.state.upnp_status_text = "Inactif".to_string();
@@ -1183,6 +1201,10 @@ impl CoopLinkApp {
 
         if self.config.enable_upnp {
             self.state.upnp_status_text = "Recherche UPnP...".to_string();
+            self.add_log(
+                LogLevel::Info,
+                "Configuration automatique du port sur la box (NAT dynamique UPnP)...",
+            );
             let upnp = self.upnp_mgr.clone();
             let listen_port = port;
 

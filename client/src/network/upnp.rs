@@ -37,11 +37,38 @@ impl UpnpManager {
         &self.current_state
     }
 
-    /// Tente d'ouvrir le port UDP sur la box internet via UPnP
+    /// Tente d'ouvrir dynamiquement le port UDP sur la box internet via UPnP IGD
     pub fn open_port(&mut self, port: u16) -> Result<Ipv4Addr> {
-        info!("Recherche de la passerelle UPnP de la box internet...");
+        info!("Recherche de la passerelle UPnP IGD de la box internet...");
         self.current_state = UpnpState::Searching;
 
+        // Méthode 1 : API native Windows NATUPnP COM (HNetCfg.NATUPnP - supporte 100% Freebox, Livebox, Bbox, SFR)
+        #[cfg(windows)]
+        {
+            if let Ok(local_ip) = get_local_lan_ip() {
+                let ps_cmd = format!(
+                    r#"try {{ $nat = New-Object -ComObject HNetCfg.NATUPnP; $maps = $nat.StaticPortMappingCollection; if ($maps) {{ $m = $maps | Where-Object {{ $_.ExternalPort -eq {0} -and $_.Protocol -eq 'UDP' }}; if (-not $m) {{ $maps.Add({0}, 'UDP', {0}, '{1}', $true, 'CoopLink Virtual LAN'); }} $ip = ($maps | Where-Object {{ $_.ExternalPort -eq {0} }}).ExternalIPAddress; if ($ip) {{ Write-Output $ip; exit 0 }} }} }} catch {{ }} exit 1"#,
+                    port, local_ip
+                );
+                if let Ok(out) = crate::platform::windows::process::run_hidden_powershell(&ps_cmd) {
+                    if out.status.success() {
+                        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                        if let Ok(ext_ip) = stdout.parse::<Ipv4Addr>() {
+                            info!("Box UPnP (Windows NATUPnP) : Port UDP {} ouvert avec succès vers {} ! IP Externe: {}", port, local_ip, ext_ip);
+                            self.current_state = UpnpState::Active {
+                                external_ip: ext_ip,
+                                mapped_port: port,
+                                gateway_name: "Box Internet (UPnP IGD Windows)".to_string(),
+                            };
+                            self.mapped_port = Some(port);
+                            return Ok(ext_ip);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Méthode 2 : Bibliothèque igd_next (Multiplateforme Linux/macOS ou fallback Windows)
         let mut options = SearchOptions::default();
         options.timeout = Some(Duration::from_secs(3));
 
@@ -116,6 +143,15 @@ impl UpnpManager {
 
     /// Ferme proprement le port sur la box
     pub fn close_port(&mut self) {
+        #[cfg(windows)]
+        if let Some(port) = self.mapped_port {
+            let ps_cmd = format!(
+                r#"try {{ $nat = New-Object -ComObject HNetCfg.NATUPnP; $maps = $nat.StaticPortMappingCollection; if ($maps) {{ $maps.Remove({0}, 'UDP') }} }} catch {{ }}"#,
+                port
+            );
+            let _ = crate::platform::windows::process::run_hidden_powershell(&ps_cmd);
+        }
+
         if let (Some(gw), Some(port)) = (&self.active_gateway, self.mapped_port) {
             info!("Fermeture du port UPnP {} sur la box...", port);
             let _ = gw.remove_port(PortMappingProtocol::UDP, port);
@@ -128,7 +164,6 @@ impl UpnpManager {
 
 /// Trouve l'IP locale du PC utilisée pour communiquer sur le réseau local
 fn get_local_lan_ip() -> Result<Ipv4Addr> {
-    // Connexion UDP factice (sans émission réelle de paquets) pour identifier l'interface locale active
     let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
     socket.connect("8.8.8.8:80")?;
     if let SocketAddr::V4(addr) = socket.local_addr()? {
