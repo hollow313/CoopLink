@@ -536,7 +536,7 @@ impl NetworkTunnel {
         .encode_encrypted(&session_key);
         socket.send_to(&req, server_addr).await?;
 
-        // Tâche de relance du Handshake si perte UDP et gestion du timeout (passe en Error si pas de réponse)
+        // Tâche de relance du Handshake si perte UDP et gestion du timeout (8 tentatives sur ~15s)
         let running_retry = self.running.clone();
         let status_retry = self.conn_status.clone();
         let err_retry = self.last_error.clone();
@@ -545,7 +545,7 @@ impl NetworkTunnel {
         let auth_retry = auth_hex.clone();
 
         tokio::spawn(async move {
-            for attempt in 1..=3 {
+            for attempt in 1..=8 {
                 tokio::time::sleep(Duration::from_millis(1800)).await;
                 if !running_retry.load(Ordering::Relaxed) {
                     return;
@@ -553,7 +553,7 @@ impl NetworkTunnel {
                 if *status_retry.read() != ConnectionStatus::Connecting {
                     return;
                 }
-                if attempt < 3 {
+                if attempt < 8 {
                     let retry_pkt = CoopPacket::HandshakeRequest {
                         player_name: player_retry.clone(),
                         room_code: auth_retry.clone(),
@@ -564,7 +564,7 @@ impl NetworkTunnel {
                 } else {
                     *status_retry.write() = ConnectionStatus::Error;
                     *err_retry.write() = Some(
-                        "Délai d'attente dépassé ou code/mot de passe de salon incorrect.".to_string(),
+                        "Délai d'attente dépassé (15s). Vérifiez que l'Hôte a bien cliqué sur 'Créer et héberger le salon', que l'IP/Port sont exacts et que le Code de salon est identique.".to_string(),
                     );
                 }
             }
@@ -578,16 +578,16 @@ impl NetworkTunnel {
         let last_err_holder = self.last_error.clone();
         let rx_counter = self.bytes_rx.clone();
 
-        // Tâche de réception client (vérifie strictement src_endpoint == server_addr + AEAD)
+        // Tâche de réception client (vérifie src_endpoint.ip() == server_addr.ip() + AEAD)
         tokio::spawn(async move {
             let mut buf = vec![0u8; 65535];
             while running_flag.load(Ordering::Relaxed) {
                 match socket_rx.recv_from(&mut buf).await {
                     Ok((len, src_endpoint)) => {
-                        // Sécurité Client : Ignore tout paquet ne provenant pas de l'adresse du serveur hôte
-                        if src_endpoint != server_addr {
+                        // Sécurité Client : Ignore tout paquet ne provenant pas de l'IP du serveur hôte
+                        if src_endpoint.ip() != server_addr.ip() {
                             debug!(
-                                "Paquet ignoré depuis une source tierce non autorisée: {} (attendu: {})",
+                                "Paquet ignoré depuis une source IP non autorisée: {} (attendu: {})",
                                 src_endpoint, server_addr
                             );
                             continue;
@@ -793,6 +793,7 @@ impl NetworkTunnel {
 
                     for peer in self.peers.read().values() {
                         if !peer.is_host {
+                            let _ = sock.try_send_to(&disc, peer.endpoint);
                             let _ = sock.try_send_to(&disc, peer.endpoint);
                         }
                     }

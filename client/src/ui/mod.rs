@@ -401,14 +401,6 @@ impl eframe::App for CoopLinkApp {
                             self.state.room_code = trimmed.to_string();
                         }
                     }
-                    if ui.button("🔍 Détecter l'IP").on_hover_text("Trouve automatiquement l'IP de l'hôte via le code de salon").clicked() {
-                        let code = self.state.room_code.trim();
-                        if !code.is_empty() {
-                            if let Some((ip, port)) = resolve_room_endpoint(code) {
-                                self.config.remote_server_address = format!("{}:{}", ip, port);
-                            }
-                        }
-                    }
                 });
                 ui.add_space(10.0);
 
@@ -1149,8 +1141,6 @@ impl CoopLinkApp {
 
         let tunnel = self.tunnel.clone();
         let bcast_relay = self.broadcast_relay.clone();
-        let r_code = room_code.clone();
-        let p_name = player_name.clone();
 
         self.rt.spawn(async move {
             let _ = bcast_relay.start(host_ip, to_tunnel_bcast_tx, from_bcast_net).await;
@@ -1182,33 +1172,6 @@ impl CoopLinkApp {
             ),
         );
 
-        // Enregistrement Web du salon sur https://cooplink.home-lh.ovh
-        let r_port = port;
-        let p_ip = self.state.public_ip.map(|ip| ip.to_string());
-        std::thread::spawn(move || {
-            use std::io::Write;
-            use std::net::ToSocketAddrs;
-            if let Ok(mut addrs) = "cooplink.home-lh.ovh:30024".to_socket_addrs() {
-                if let Some(addr) = addrs.next() {
-                    if let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(2500)) {
-                        let payload = serde_json::json!({
-                            "room_code": r_code,
-                            "host_name": p_name,
-                            "port": r_port,
-                            "public_ip": p_ip,
-                        });
-                        let json_str = payload.to_string();
-                        let req = format!(
-                            "POST /api/rooms/register HTTP/1.1\r\nHost: cooplink.home-lh.ovh\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            json_str.len(),
-                            json_str
-                        );
-                        let _ = stream.write_all(req.as_bytes());
-                    }
-                }
-            }
-        });
-
         if self.config.enable_upnp {
             self.state.upnp_status_text = "Recherche UPnP...".to_string();
             let upnp = self.upnp_mgr.clone();
@@ -1222,20 +1185,8 @@ impl CoopLinkApp {
     }
 
     fn start_client_node(&mut self) {
-        let mut server_str = self.config.remote_server_address.clone();
+        let server_str = self.config.remote_server_address.trim().to_string();
         let room_code = self.state.room_code.trim().to_string();
-
-        // Résolution automatique par code de salon auprès du serveur central si 127.0.0.1 ou vide
-        if (server_str.contains("127.0.0.1") || server_str.is_empty()) && !room_code.is_empty() {
-            if let Some((resolved_ip, resolved_port)) = resolve_room_endpoint(&room_code) {
-                server_str = format!("{}:{}", resolved_ip, resolved_port);
-                self.config.remote_server_address = server_str.clone();
-                self.add_log(
-                    LogLevel::Success,
-                    &format!("Salon '{}' résolu sur l'IP hôte : {}", room_code, server_str),
-                );
-            }
-        }
 
         let server_addr: SocketAddr = match server_str.parse() {
             Ok(addr) => addr,
@@ -1371,33 +1322,4 @@ fn tab_button(ui: &mut egui::Ui, current: &mut ActiveTab, tab: ActiveTab, label:
     if ui.add(btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
         *current = tab;
     }
-}
-
-pub fn resolve_room_endpoint(code: &str) -> Option<(String, u16)> {
-    use std::io::{Read, Write};
-    use std::net::{TcpStream, ToSocketAddrs};
-    let addrs = "cooplink.home-lh.ovh:30024".to_socket_addrs().ok()?;
-    for addr in addrs {
-        if let Ok(mut stream) = TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(2000)) {
-            let req = format!(
-                "GET /api/rooms/{} HTTP/1.1\r\nHost: cooplink.home-lh.ovh\r\nConnection: close\r\n\r\n",
-                code.trim()
-            );
-            if stream.write_all(req.as_bytes()).is_ok() {
-                let mut resp = String::new();
-                if stream.read_to_string(&mut resp).is_ok() {
-                    if let Some(body) = resp.split("\r\n\r\n").nth(1) {
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
-                            if val["found"].as_bool() == Some(true) {
-                                let ip = val["host_public_ip"].as_str()?.to_string();
-                                let port = val["host_port"].as_u64()? as u16;
-                                return Some((ip, port));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
 }
