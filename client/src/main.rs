@@ -47,7 +47,36 @@ struct Args {
     minimized: bool,
 }
 
+const EMBEDDED_VIEWER_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded_viewer.bin"));
+const EMBEDDED_CAPTURE_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded_capture.bin"));
+
+fn ensure_companion_services() {
+    if let Ok(cur) = std::env::current_exe() {
+        if let Some(parent) = cur.parent() {
+            let bin_dir = parent.join("bin");
+            let _ = std::fs::create_dir_all(&bin_dir);
+
+            // 1. cooplink-viewer.exe
+            let v1 = parent.join("cooplink-viewer.exe");
+            let v2 = bin_dir.join("cooplink-viewer.exe");
+            if !v1.exists() && !v2.exists() && EMBEDDED_VIEWER_BIN.len() > 10_000 {
+                let _ = std::fs::write(&v1, EMBEDDED_VIEWER_BIN);
+                let _ = std::fs::write(&v2, EMBEDDED_VIEWER_BIN);
+            }
+
+            // 2. cooplink-capture-service.exe
+            let c1 = parent.join("cooplink-capture-service.exe");
+            let c2 = bin_dir.join("cooplink-capture-service.exe");
+            if !c1.exists() && !c2.exists() && EMBEDDED_CAPTURE_BIN.len() > 10_000 {
+                let _ = std::fs::write(&c1, EMBEDDED_CAPTURE_BIN);
+                let _ = std::fs::write(&c2, EMBEDDED_CAPTURE_BIN);
+            }
+        }
+    }
+}
+
 fn main() -> eframe::Result<()> {
+    ensure_companion_services();
     // Initialisation du système de logs
     tracing_subscriber::fmt()
         .with_env_filter("cooplink=info,wintun=warn")

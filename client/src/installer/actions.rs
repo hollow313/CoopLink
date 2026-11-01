@@ -10,6 +10,9 @@ use std::process::Command;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const EMBEDDED_COOPLINK_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded_cooplink.bin"));
+pub const EMBEDDED_VIEWER_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded_viewer.bin"));
+pub const EMBEDDED_CAPTURE_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded_capture.bin"));
+pub const EMBEDDED_TEST_GAME_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded_test_game.bin"));
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -316,13 +319,34 @@ pub fn populate_complete_software_tree(
             None
         };
 
+        // 1. cooplink-viewer.exe
+        let viewer_dest = base.join("cooplink-viewer.exe");
+        let viewer_bin_dest = bin_dir.join("cooplink-viewer.exe");
         if let Some(src) = sibling_or_target("cooplink-viewer.exe") {
-            let _ = fs::copy(&src, base.join("cooplink-viewer.exe"));
-            let _ = fs::copy(&src, bin_dir.join("cooplink-viewer.exe"));
+            let _ = fs::copy(&src, &viewer_dest);
+            let _ = fs::copy(&src, &viewer_bin_dest);
+        } else if EMBEDDED_VIEWER_BIN.len() > 10_000 {
+            let _ = fs::write(&viewer_dest, EMBEDDED_VIEWER_BIN);
+            let _ = fs::write(&viewer_bin_dest, EMBEDDED_VIEWER_BIN);
         }
+
+        // 2. cooplink-capture-service.exe
+        let capture_dest = base.join("cooplink-capture-service.exe");
+        let capture_bin_dest = bin_dir.join("cooplink-capture-service.exe");
         if let Some(src) = sibling_or_target("cooplink-capture-service.exe") {
-            let _ = fs::copy(&src, base.join("cooplink-capture-service.exe"));
-            let _ = fs::copy(&src, bin_dir.join("cooplink-capture-service.exe"));
+            let _ = fs::copy(&src, &capture_dest);
+            let _ = fs::copy(&src, &capture_bin_dest);
+        } else if EMBEDDED_CAPTURE_BIN.len() > 10_000 {
+            let _ = fs::write(&capture_dest, EMBEDDED_CAPTURE_BIN);
+            let _ = fs::write(&capture_bin_dest, EMBEDDED_CAPTURE_BIN);
+        }
+
+        // 3. test-game.exe (Jeu de test portable)
+        let test_dest = base.join("test-game.exe");
+        if let Some(src) = sibling_or_target("test-game.exe").or_else(|| sibling_or_target("cooplink-test-game.exe")) {
+            let _ = fs::copy(&src, &test_dest);
+        } else if EMBEDDED_TEST_GAME_BIN.len() > 10_000 {
+            let _ = fs::write(&test_dest, EMBEDDED_TEST_GAME_BIN);
         }
 
         // Descripteurs de modules JSON
