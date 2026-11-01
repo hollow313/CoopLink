@@ -447,22 +447,26 @@ impl eframe::App for InstallerApp {
             .frame(
                 egui::Frame::none()
                     .fill(WIN11_BG)
-                    .inner_margin(20.0),
+                    .inner_margin(16.0),
             )
             .show(ctx, |ui| {
                 egui::Frame::none()
                     .fill(WIN11_CARD)
                     .stroke(Stroke::new(1.0_f32, WIN11_BORDER))
-                    .inner_margin(22.0)
+                    .inner_margin(20.0)
                     .rounding(Rounding::same(12.0))
-                    .show(ui, |ui| match self.step {
-                        InstallStep::Welcome => self.render_welcome(ui),
-                        InstallStep::License => self.render_license(ui),
-                        InstallStep::Destination => self.render_destination(ui),
-                        InstallStep::OptionsAndDrivers => self.render_options(ui),
-                        InstallStep::Installing | InstallStep::Uninstalling => self.render_installing(ui),
-                        InstallStep::Finished => self.render_finished(ui),
-                        InstallStep::UninstallFinished => self.render_uninstall_finished(ui),
+                    .show(ui, |ui| {
+                        ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| match self.step {
+                                InstallStep::Welcome => self.render_welcome(ui),
+                                InstallStep::License => self.render_license(ui),
+                                InstallStep::Destination => self.render_destination(ui),
+                                InstallStep::OptionsAndDrivers => self.render_options(ui),
+                                InstallStep::Installing | InstallStep::Uninstalling => self.render_installing(ui),
+                                InstallStep::Finished => self.render_finished(ui),
+                                InstallStep::UninstallFinished => self.render_uninstall_finished(ui),
+                            });
                     });
             });
 
@@ -578,7 +582,7 @@ impl InstallerApp {
                     });
                 });
 
-            ui.add_space(20.0);
+            ui.add_space(10.0);
             ui.label(
                 RichText::new(match lang {
                     InstallerLang::Fr => "Cliquez sur « Suivant » pour prendre connaissance du contrat de licence et de la décharge légale de responsabilité.",
@@ -588,7 +592,7 @@ impl InstallerApp {
                     InstallerLang::Pt => "Clique em « Seguinte » para analisar o acordo legal.",
                 })
                 .color(WIN11_TEXT_MUTED)
-                .size(13.0),
+                .size(12.5),
             );
             ui.add_space(6.0);
         });
@@ -664,7 +668,7 @@ impl InstallerApp {
                 .rounding(Rounding::same(8.0))
                 .show(ui, |ui| {
                     ScrollArea::vertical()
-                        .max_height(200.0)
+                        .max_height(160.0)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             ui.label(
@@ -675,7 +679,7 @@ impl InstallerApp {
                         });
                 });
 
-            ui.add_space(16.0);
+            ui.add_space(14.0);
             ui.checkbox(
                 &mut self.license_accepted,
                 RichText::new(match lang {

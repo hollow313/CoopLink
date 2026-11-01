@@ -13,8 +13,8 @@ use wizard::InstallerApp;
 fn main() -> eframe::Result<()> {
     let mut vp = egui::ViewportBuilder::default()
         .with_title("Installation de CoopLink")
-        .with_inner_size([700.0, 530.0])
-        .with_min_inner_size([700.0, 530.0])
+        .with_inner_size([720.0, 560.0])
+        .with_min_inner_size([720.0, 560.0])
         .with_resizable(false)
         .with_maximize_button(false)
         .with_active(true)

@@ -74,6 +74,7 @@ pub struct CoopLinkApp {
     pub remember_close_choice: bool,
     pub show_welcome_tutorial: bool,
     pub tutorial_step: usize,
+    pub tutorial_optimization_applied: bool,
 }
 
 impl CoopLinkApp {
@@ -139,6 +140,7 @@ impl CoopLinkApp {
             remember_close_choice: true,
             show_welcome_tutorial: first_tutorial_needed,
             tutorial_step: 0,
+            tutorial_optimization_applied: false,
         };
 
         app.trigger_refresh_interfaces();
@@ -392,12 +394,49 @@ impl eframe::App for CoopLinkApp {
                             .size(13.5),
                         );
                         ui.add_space(10.0);
-                        if ui.button(RichText::new("⚡ Appliquer la Configuration Optimisée maintenant").strong().color(ModernTheme::BLUE_ELECTRIC)).clicked() {
-                            let measured_upload = self.speedtest_mgr.last_result.as_ref().map(|r| r.upload_mbps).unwrap_or(50.0);
-                            self.streaming_engine.capture_host.apply_auto_optimized_profile(measured_upload);
-                            self.apply_low_metric();
-                            self.repair_firewall();
-                            self.add_log(LogLevel::Success, "Configuration Optimisée appliquée avec succès depuis le guide.");
+                        if !self.tutorial_optimization_applied {
+                            let opt_btn = egui::Button::new(
+                                RichText::new("⚡ Appliquer la Configuration Optimisée maintenant")
+                                    .color(Color32::WHITE)
+                                    .strong()
+                                    .size(13.5),
+                            )
+                            .fill(ModernTheme::BLUE_ELECTRIC)
+                            .rounding(Rounding::same(8.0))
+                            .min_size(egui::vec2(340.0, 36.0));
+
+                            if ui.add(opt_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                                let measured_upload = self.speedtest_mgr.last_result.as_ref().map(|r| r.upload_mbps).unwrap_or(50.0);
+                                self.streaming_engine.capture_host.apply_auto_optimized_profile(measured_upload);
+                                self.apply_low_metric();
+                                self.repair_firewall();
+                                self.tutorial_optimization_applied = true;
+                                self.add_log(LogLevel::Success, "Configuration Optimisée appliquée avec succès depuis le guide.");
+                            }
+                        } else {
+                            egui::Frame::none()
+                                .fill(Color32::from_rgb(236, 253, 245))
+                                .stroke(egui::Stroke::new(1.0_f32, ModernTheme::GREEN_VIVID))
+                                .inner_margin(10.0)
+                                .rounding(Rounding::same(8.0))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ModernTheme::draw_dot(ui, ModernTheme::GREEN_VIVID, 5.0);
+                                        ui.vertical(|ui| {
+                                            ui.label(
+                                                RichText::new("✓ Configuration Optimisée active avec succès !")
+                                                    .color(ModernTheme::GREEN_VIVID)
+                                                    .strong()
+                                                    .size(13.5),
+                                            );
+                                            ui.label(
+                                                RichText::new("• Encodeur Matériel GPU activé\n• Métrique prioritaire 5 appliquée\n• Règles Pare-feu autorisées")
+                                                    .color(ModernTheme::TEXT_SECONDARY)
+                                                    .size(12.0),
+                                            );
+                                        });
+                                    });
+                                });
                         }
                     }
                     _ => {

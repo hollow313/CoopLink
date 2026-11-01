@@ -583,6 +583,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cooplink-test-game"
+version = "1.0.0"
+dependencies = [
+ "chrono",
+ "eframe",
+ "egui",
+ "parking_lot",
+ "rand 0.8.8",
+ "socket2 0.5.10",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

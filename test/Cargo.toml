@@ -1,0 +1,26 @@
+[package]
+name = "cooplink-test-game"
+version = "1.0.0"
+edition = "2021"
+authors = ["Loic <loic.huon@outlook.com>"]
+description = "CoopLink Virtual Game Simulator & Feature Verification Tool (No Install Required)"
+
+[dependencies]
+eframe = { version = "0.29.1", default-features = false, features = ["glow", "default_fonts"] }
+egui = "0.29.1"
+rand = "0.8"
+chrono = "0.4"
+parking_lot = "0.12"
+socket2 = "0.5"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_Media_Audio",
+] }
+
+[[bin]]
+name = "cooplink-test-game"
+path = "src/main.rs"
