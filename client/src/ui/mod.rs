@@ -1057,16 +1057,24 @@ impl eframe::App for CoopLinkApp {
                     self.add_log(LogLevel::Warning, "Partage de jeu arrêté.");
                 }
                 if on_start_client_stream {
-                    let target_str = if let Some(peer) = self.state.peers.first() {
-                        peer.endpoint.ip().to_string()
-                    } else if let Ok(parsed) = self.config.remote_server_address.parse::<SocketAddr>() {
-                        parsed.ip().to_string()
+                    let my_cur_vip = self.state.virtual_ip.unwrap_or(if self.state.role == NodeRole::Host {
+                        self.config.host_virtual_ip
                     } else {
-                        self.streaming_engine.stream_viewer.target_host_vip.to_string()
-                    };
+                        Ipv4Addr::new(10, 244, 0, 2)
+                    });
 
-                    let my_vip = self.state.virtual_ip.unwrap_or(Ipv4Addr::new(10, 244, 0, 2));
-                    let host_vip = self.streaming_engine.stream_viewer.target_host_vip;
+                    // Cible en priorité l'IP virtuelle de l'autre pair dans le tunnel chiffré
+                    let target_vip = if let Some(peer) = self.state.peers.iter().find(|p| p.virtual_ip != my_cur_vip) {
+                        peer.virtual_ip
+                    } else if self.state.role == NodeRole::Client {
+                        self.config.host_virtual_ip
+                    } else {
+                        Ipv4Addr::new(10, 244, 0, 2)
+                    };
+                    let target_str = target_vip.to_string();
+
+                    let my_vip = my_cur_vip;
+                    let host_vip = target_vip;
                     let req = self.streaming_engine.pairing.build_pair_request(
                         1002,
                         &self.config.player_name,
@@ -1091,7 +1099,7 @@ impl eframe::App for CoopLinkApp {
                     self.add_log(
                         LogLevel::Success,
                         &format!(
-                            "Session de jeu partagé ouverte vers {} (Assigné : Joueur {}).",
+                            "Session de jeu partagé ouverte vers l'IP virtuelle {} (Assigné : Joueur {}).",
                             target_str, slot
                         ),
                     );

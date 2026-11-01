@@ -4,26 +4,44 @@
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use tracing::info;
 
 /// Récupère l'adresse IP publique de la machine en quelques millisecondes sans dépendance externe
 pub fn fetch_public_ip_sync() -> Option<Ipv4Addr> {
     #[cfg(windows)]
     {
-        let ps_cmd = "(Invoke-WebRequest -Uri 'https://api.ipify.org' -UseBasicParsing -TimeoutSec 3).Content.Trim()";
-        if let Ok(out) = crate::platform::windows::process::run_hidden_powershell(ps_cmd) {
-            let trimmed = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if let Ok(ip) = trimmed.parse::<Ipv4Addr>() {
-                info!("IP publique détectée via PowerShell : {}", ip);
-                return Some(ip);
+        // Interrogation PowerShell directe sans préfixe d'erreur
+        let ps_cmd = "(Invoke-WebRequest -Uri 'https://api.ipify.org' -UseBasicParsing -TimeoutSec 3).Content";
+        if let Ok(out) = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ps_cmd])
+            .creation_flags(crate::platform::windows::process::CREATE_NO_WINDOW)
+            .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if let Ok(ip) = trimmed.parse::<Ipv4Addr>() {
+                    info!("IP publique détectée via PowerShell : {}", ip);
+                    return Some(ip);
+                }
             }
         }
-        let ps_fallback = "(Invoke-WebRequest -Uri 'https://ifconfig.me/ip' -UseBasicParsing -TimeoutSec 3).Content.Trim()";
-        if let Ok(out) = crate::platform::windows::process::run_hidden_powershell(ps_fallback) {
-            let trimmed = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if let Ok(ip) = trimmed.parse::<Ipv4Addr>() {
-                info!("IP publique détectée via PowerShell fallback : {}", ip);
-                return Some(ip);
+
+        let ps_fallback = "(Invoke-WebRequest -Uri 'https://ifconfig.me/ip' -UseBasicParsing -TimeoutSec 3).Content";
+        if let Ok(out) = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ps_fallback])
+            .creation_flags(crate::platform::windows::process::CREATE_NO_WINDOW)
+            .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if let Ok(ip) = trimmed.parse::<Ipv4Addr>() {
+                    info!("IP publique détectée via PowerShell fallback : {}", ip);
+                    return Some(ip);
+                }
             }
         }
     }
