@@ -491,9 +491,9 @@ impl InstallerApp {
                 })
                 .color(WIN11_TEXT_MAIN)
                 .strong()
-                .size(17.0),
+                .size(17.5),
             );
-            ui.add_space(6.0);
+            ui.add_space(8.0);
 
             ui.label(
                 RichText::new(match lang {
@@ -507,12 +507,12 @@ impl InstallerApp {
                 .size(13.5),
             );
 
-            ui.add_space(14.0);
+            ui.add_space(16.0);
 
             egui::Frame::none()
                 .fill(WIN11_SUBTLE)
                 .stroke(Stroke::new(1.0_f32, WIN11_BORDER))
-                .inner_margin(16.0)
+                .inner_margin(18.0)
                 .rounding(Rounding::same(10.0))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -578,7 +578,7 @@ impl InstallerApp {
                     });
                 });
 
-            ui.add_space(14.0);
+            ui.add_space(20.0);
             ui.label(
                 RichText::new(match lang {
                     InstallerLang::Fr => "Cliquez sur « Suivant » pour prendre connaissance du contrat de licence et de la décharge légale de responsabilité.",
@@ -588,8 +588,9 @@ impl InstallerApp {
                     InstallerLang::Pt => "Clique em « Seguinte » para analisar o acordo legal.",
                 })
                 .color(WIN11_TEXT_MUTED)
-                .size(12.5),
+                .size(13.0),
             );
+            ui.add_space(6.0);
         });
     }
 
@@ -674,7 +675,7 @@ impl InstallerApp {
                         });
                 });
 
-            ui.add_space(10.0);
+            ui.add_space(16.0);
             ui.checkbox(
                 &mut self.license_accepted,
                 RichText::new(match lang {
@@ -688,6 +689,7 @@ impl InstallerApp {
                 .strong()
                 .size(13.0),
             );
+            ui.add_space(8.0);
         });
     }
 
@@ -721,11 +723,13 @@ impl InstallerApp {
             ui.add_space(12.0);
 
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Dossier :").color(WIN11_TEXT_MAIN).strong().size(13.0));
+                ui.label(RichText::new("Dossier :").color(WIN11_TEXT_MAIN).strong().size(13.5));
+                ui.add_space(4.0);
                 ui.add(
                     egui::TextEdit::singleline(&mut self.install_dir)
-                        .desired_width(330.0),
+                        .desired_width(320.0),
                 );
+                ui.add_space(6.0);
                 if ui
                     .button(match lang {
                         InstallerLang::Fr => "Parcourir...",
@@ -743,12 +747,12 @@ impl InstallerApp {
                 }
             });
 
-            ui.add_space(16.0);
+            ui.add_space(18.0);
 
             egui::Frame::none()
                 .fill(WIN11_SUBTLE)
                 .stroke(Stroke::new(1.0_f32, WIN11_BORDER))
-                .inner_margin(14.0)
+                .inner_margin(16.0)
                 .rounding(Rounding::same(8.0))
                 .show(ui, |ui| {
                     ui.label(
@@ -757,22 +761,25 @@ impl InstallerApp {
                             .strong()
                             .size(13.5),
                     );
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                     ui.label(
                         RichText::new("• cooplink.exe & unins000.exe (Application principale & Utilitaire de désinstallation)")
                             .color(WIN11_TEXT_MAIN)
                             .size(12.5),
                     );
+                    ui.add_space(5.0);
                     ui.label(
                         RichText::new("• bin\\ (Descripteurs des modules Capture 120 FPS, Stream Viewer & WASAPI Audio)")
                             .color(WIN11_TEXT_MAIN)
                             .size(12.5),
                     );
+                    ui.add_space(5.0);
                     ui.label(
                         RichText::new("• drivers\\ (Manifeste matériel, Bus Manettes 4 Joueurs & Adaptateur LAN Virtuel)")
                             .color(WIN11_TEXT_MAIN)
                             .size(12.5),
                     );
+                    ui.add_space(5.0);
                     ui.label(
                         RichText::new("• config\\ & resources\\ (Profils optimisés Métrique 5, Pare-feu, CLUF & Icônes HD)")
                             .color(WIN11_TEXT_MAIN)
@@ -835,7 +842,7 @@ impl InstallerApp {
                     }
                 });
 
-            ui.add_space(12.0);
+            ui.add_space(14.0);
 
             ui.checkbox(
                 &mut self.create_desktop_shortcut,
@@ -849,6 +856,7 @@ impl InstallerApp {
                 .color(WIN11_TEXT_MAIN)
                 .size(13.0),
             );
+            ui.add_space(8.0);
 
             ui.checkbox(
                 &mut self.create_start_menu_shortcut,
@@ -862,6 +870,7 @@ impl InstallerApp {
                 .color(WIN11_TEXT_MAIN)
                 .size(13.0),
             );
+            ui.add_space(8.0);
 
             ui.checkbox(
                 &mut self.configure_firewall,
@@ -875,6 +884,7 @@ impl InstallerApp {
                 .color(WIN11_TEXT_MAIN)
                 .size(13.0),
             );
+            ui.add_space(8.0);
 
             ui.checkbox(
                 &mut self.launch_on_finish,
@@ -996,9 +1006,14 @@ impl InstallerApp {
             *status_txt.lock() = "Création de l'arborescence logicielle...".to_string();
             thread::sleep(Duration::from_millis(250));
 
+            let possible_source = current_exe
+                .parent()
+                .map(|p| p.join("cooplink.exe"))
+                .unwrap_or_else(|| current_exe.clone());
+
             let effective_dir = populate_complete_software_tree(
                 &target_dir,
-                &current_exe,
+                &possible_source,
                 &current_exe,
                 &hw_check,
             );
@@ -1076,10 +1091,13 @@ fn setup_installer_theme(ctx: &egui::Context) {
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, WIN11_BLUE);
     visuals.widgets.hovered.rounding = rounding;
 
-    // Typographie nette, claire et professionnelle
+    // Typographie nette, aérée et professionnelle
+    style.spacing.item_spacing = egui::vec2(10.0, 10.0);
+    style.spacing.button_padding = egui::vec2(14.0, 7.0);
+
     style.text_styles.insert(
         TextStyle::Heading,
-        FontId::new(17.0, FontFamily::Proportional),
+        FontId::new(17.5, FontFamily::Proportional),
     );
     style.text_styles.insert(
         TextStyle::Body,

@@ -69,11 +69,12 @@ impl StreamingEngine {
                 let text = String::from_utf8_lossy(&out.stdout);
                 let ignored_keywords = [
                     "cooplink",
-                    "paramètres",
-                    "parametres",
+                    "param",
                     "settings",
+                    "configur",
                     "cua.agent",
                     "cursoroverlay",
+                    "overlay",
                     "textinputhost",
                     "applicationframehost",
                     "shellexperiencehost",
@@ -82,9 +83,9 @@ impl StreamingEngine {
                     "microsoft text",
                     "explorateur",
                     "file explorer",
-                    "nvidia geforce overlay",
+                    "nvidia geforce",
                     "task manager",
-                    "gestionnaire des tâches",
+                    "gestionnaire des",
                 ];
 
                 for line in text.lines() {

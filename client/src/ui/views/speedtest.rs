@@ -829,18 +829,19 @@ impl SpeedtestView {
         egui::Frame::none()
             .fill(ModernTheme::CARD_BG)
             .rounding(Rounding::same(10.0))
-            .inner_margin(14.0)
+            .inner_margin(16.0)
             .stroke(Stroke::new(1.0_f32, ModernTheme::BORDER_SUBTLE))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
+                ui.set_min_height(115.0);
                 ui.horizontal_wrapped(|ui| {
                     ModernTheme::draw_dot(ui, accent, 4.0);
                     ui.label(RichText::new(title).color(ModernTheme::TEXT_MUTED).strong().size(11.0));
                 });
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 ui.label(RichText::new(value).color(ModernTheme::TEXT_PRIMARY).strong().size(17.5));
-                ui.add_space(4.0);
-                ui.label(RichText::new(sub).color(ModernTheme::TEXT_SECONDARY).size(11.5));
+                ui.add_space(6.0);
+                ui.label(RichText::new(sub).color(ModernTheme::TEXT_SECONDARY).size(12.0));
             });
     }
 

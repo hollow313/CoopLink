@@ -751,68 +751,72 @@ impl eframe::App for CoopLinkApp {
                 let mut on_stop_client_stream = false;
                 let mut on_apply_auto_optimize = false;
 
-                match self.active_tab {
-                    ActiveTab::Lobby => {
-                        LobbyView::render(
-                            ui,
-                            &mut self.state,
-                            &mut self.config,
-                            &self.tunnel,
-                            &mut on_host_clicked,
-                            &mut on_join_clicked,
-                            &mut on_disconnect_clicked,
-                        );
-                    }
-                    ActiveTab::Streaming => {
-                        StreamingView::render(
-                            ui,
-                            lang,
-                            &self.state,
-                            &mut self.streaming_engine,
-                            &mut on_start_host_stream,
-                            &mut on_stop_host_stream,
-                            &mut on_start_client_stream,
-                            &mut on_stop_client_stream,
-                        );
-                    }
-                    ActiveTab::Speedtest => {
-                        SpeedtestView::render(
-                            ui,
-                            lang,
-                            &mut self.speedtest_mgr,
-                            &self.state,
-                            &self.streaming_engine.capture_host.detected_gpu_name,
-                            self.streaming_engine.capture_host.detected_virtual_display_name.as_deref(),
-                            self.streaming_engine.capture_host.active_encoder,
-                            self.streaming_engine.capture_host.auto_optimized_mode,
-                            &self.config.player_name,
-                            &mut on_apply_auto_optimize,
-                        );
-                    }
-                    ActiveTab::Network => {
-                        NetworkView::render(
-                            ui,
-                            &mut self.state,
-                            &mut self.config,
-                            &mut on_apply_metric_clicked,
-                            &mut on_refresh_interfaces_clicked,
-                        );
-                    }
-                    ActiveTab::Firewall => {
-                        FirewallView::render(
-                            ui,
-                            &mut self.state,
-                            &mut self.config,
-                            &mut on_repair_firewall_clicked,
-                        );
-                    }
-                    ActiveTab::Settings => {
-                        SettingsView::render(ui, &mut self.config, &mut self.saved_notice);
-                    }
-                    ActiveTab::Console => {
-                        ConsoleView::render(ui, lang, &self.logs, &mut on_clear_console_clicked);
-                    }
-                }
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        match self.active_tab {
+                            ActiveTab::Lobby => {
+                                LobbyView::render(
+                                    ui,
+                                    &mut self.state,
+                                    &mut self.config,
+                                    &self.tunnel,
+                                    &mut on_host_clicked,
+                                    &mut on_join_clicked,
+                                    &mut on_disconnect_clicked,
+                                );
+                            }
+                            ActiveTab::Streaming => {
+                                StreamingView::render(
+                                    ui,
+                                    lang,
+                                    &self.state,
+                                    &mut self.streaming_engine,
+                                    &mut on_start_host_stream,
+                                    &mut on_stop_host_stream,
+                                    &mut on_start_client_stream,
+                                    &mut on_stop_client_stream,
+                                );
+                            }
+                            ActiveTab::Speedtest => {
+                                SpeedtestView::render(
+                                    ui,
+                                    lang,
+                                    &mut self.speedtest_mgr,
+                                    &self.state,
+                                    &self.streaming_engine.capture_host.detected_gpu_name,
+                                    self.streaming_engine.capture_host.detected_virtual_display_name.as_deref(),
+                                    self.streaming_engine.capture_host.active_encoder,
+                                    self.streaming_engine.capture_host.auto_optimized_mode,
+                                    &self.config.player_name,
+                                    &mut on_apply_auto_optimize,
+                                );
+                            }
+                            ActiveTab::Network => {
+                                NetworkView::render(
+                                    ui,
+                                    &mut self.state,
+                                    &mut self.config,
+                                    &mut on_apply_metric_clicked,
+                                    &mut on_refresh_interfaces_clicked,
+                                );
+                            }
+                            ActiveTab::Firewall => {
+                                FirewallView::render(
+                                    ui,
+                                    &mut self.state,
+                                    &mut self.config,
+                                    &mut on_repair_firewall_clicked,
+                                );
+                            }
+                            ActiveTab::Settings => {
+                                SettingsView::render(ui, &mut self.config, &mut self.saved_notice);
+                            }
+                            ActiveTab::Console => {
+                                ConsoleView::render(ui, lang, &self.logs, &mut on_clear_console_clicked);
+                            }
+                        }
+                    });
 
                 if on_host_clicked {
                     self.start_host_node();

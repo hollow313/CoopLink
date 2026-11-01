@@ -245,7 +245,8 @@ fn render_connection_dashboard(
                         .desired_width(135.0),
                 );
             });
-            ui.add_space(6.0);
+
+            ui.add_space(10.0);
             ui.label(
                 RichText::new(match lang {
                     Language::Fr => "Sécurité P2P Chiffrée : un joueur doit obligatoirement renseigner le Code du salon (et le mot de passe si configuré) pour être authentifié.",
@@ -257,19 +258,20 @@ fn render_connection_dashboard(
                 .color(ModernTheme::TEXT_MUTED)
                 .size(12.0),
             );
+            ui.add_space(2.0);
         });
 
-    ui.add_space(14.0);
+    ui.add_space(16.0);
 
     // 2. Deux cartes parfaitement symétriques et identiques en dimensions et alignement
-    let card_height = 175.0;
+    let card_height = 185.0;
 
     ui.columns(2, |columns| {
         // Colonne 1 : HÉBERGER UN SALON
         egui::Frame::none()
             .fill(ModernTheme::CARD_BG)
             .stroke(Stroke::new(1.5_f32, ModernTheme::BORDER_SUBTLE))
-            .inner_margin(18.0)
+            .inner_margin(20.0)
             .rounding(Rounding::same(10.0))
             .show(&mut columns[0], |ui| {
                 ui.set_min_height(card_height);
@@ -291,7 +293,7 @@ fn render_connection_dashboard(
                             .size(16.5),
                         );
                     });
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                     ui.label(
                         RichText::new(match lang {
                             Language::Fr => "Créez une session sécurisée pour héberger vos amis en LAN ou partager votre écran et vos manettes.",
@@ -320,7 +322,7 @@ fn render_connection_dashboard(
                         )
                         .fill(ModernTheme::BLUE_ELECTRIC)
                         .rounding(Rounding::same(8.0))
-                        .min_size(egui::vec2(ui.available_width(), 38.0));
+                        .min_size(egui::vec2(ui.available_width(), 40.0));
 
                         if ui.add(host_btn).clicked() {
                             *on_host_clicked = true;
@@ -333,7 +335,7 @@ fn render_connection_dashboard(
         egui::Frame::none()
             .fill(ModernTheme::CARD_BG)
             .stroke(Stroke::new(1.5_f32, ModernTheme::BORDER_SUBTLE))
-            .inner_margin(18.0)
+            .inner_margin(20.0)
             .rounding(Rounding::same(10.0))
             .show(&mut columns[1], |ui| {
                 ui.set_min_height(card_height);
@@ -355,6 +357,18 @@ fn render_connection_dashboard(
                             .size(16.5),
                         );
                     });
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(match lang {
+                            Language::Fr => "Entrez l'adresse de votre ami pour vous connecter directement à son salon :",
+                            Language::En => "Enter your friend's address to connect directly to their room:",
+                            Language::Es => "Introduce la dirección de tu amigo para unirte:",
+                            Language::De => "Gib die Adresse deines Freundes ein:",
+                            Language::Pt => "Introduza o endereço do seu amigo para se ligar:",
+                        })
+                        .color(ModernTheme::TEXT_SECONDARY)
+                        .size(13.0),
+                    );
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.label(
@@ -390,7 +404,7 @@ fn render_connection_dashboard(
                         )
                         .fill(ModernTheme::GREEN_VIVID)
                         .rounding(Rounding::same(8.0))
-                        .min_size(egui::vec2(ui.available_width(), 38.0));
+                        .min_size(egui::vec2(ui.available_width(), 40.0));
 
                         if ui.add(join_btn).clicked() {
                             *on_join_clicked = true;

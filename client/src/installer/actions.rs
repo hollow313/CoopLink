@@ -9,6 +9,8 @@ use std::process::Command;
 #[allow(dead_code)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+const EMBEDDED_COOPLINK_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded_cooplink.bin"));
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct HardwareDriverCheck {
@@ -225,10 +227,55 @@ pub fn populate_complete_software_tree(
 
         // A. Exécutable principal et Désinstalleur (`cooplink.exe` & `unins000.exe`)
         let target_exe = base.join("cooplink.exe");
-        if source_exe.exists() {
-            let _ = fs::copy(source_exe, &target_exe);
-        } else if installer_exe.exists() {
-            let _ = fs::copy(installer_exe, &target_exe);
+
+        // Recherche sécurisée du véritable binaire client cooplink.exe (ne jamais copier le setup en tant que cooplink.exe)
+        let is_setup = |p: &Path| -> bool {
+            let name = p.file_name().and_then(|f| f.to_str()).unwrap_or("").to_lowercase();
+            name.contains("setup") || name.contains("unins")
+        };
+
+        let mut cooplink_written = false;
+
+        // 1. Si source_exe est fourni et n'est pas l'installateur
+        if source_exe.exists() && !is_setup(source_exe) {
+            if fs::copy(source_exe, &target_exe).is_ok() {
+                cooplink_written = true;
+            }
+        }
+
+        // 2. Si non écrit, chercher à côté de l'installateur (ex: dossier contenant cooplink-setup.exe)
+        if !cooplink_written {
+            if let Some(parent) = installer_exe.parent() {
+                let sibling = parent.join("cooplink.exe");
+                if sibling.exists() && !is_setup(&sibling) {
+                    if fs::copy(&sibling, &target_exe).is_ok() {
+                        cooplink_written = true;
+                    }
+                }
+            }
+        }
+
+        // 3. Si non écrit, chercher dans les répertoires standards de build
+        if !cooplink_written {
+            let release_candidates = [
+                PathBuf::from("target\\release\\cooplink.exe"),
+                PathBuf::from("..\\target\\release\\cooplink.exe"),
+                PathBuf::from("..\\..\\target\\release\\cooplink.exe"),
+                PathBuf::from("D:\\Loic\\Antigravity\\CoopLink\\target\\release\\cooplink.exe"),
+            ];
+            for cand in &release_candidates {
+                if cand.exists() {
+                    if fs::copy(cand, &target_exe).is_ok() {
+                        cooplink_written = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 4. Si non écrit, utiliser le payload binaire embarqué
+        if !cooplink_written && EMBEDDED_COOPLINK_BIN.len() > 100_000 {
+            let _ = fs::write(&target_exe, EMBEDDED_COOPLINK_BIN);
         }
 
         let unins_exe = base.join("unins000.exe");
