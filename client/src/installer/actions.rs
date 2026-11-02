@@ -107,6 +107,37 @@ fn is_virtual_display_name(name: &str) -> bool {
         || u.contains("REMOTE DESKTOP")
 }
 
+/// Installateur ViGEmBus embarqué : le pilote de manette virtuelle ne peut pas
+/// manquer, même hors ligne (binaire signé, redistribué tel quel).
+const VIGEM_INSTALLER: &[u8] =
+    include_bytes!("../../../installer/redist/ViGEmBus_1.22.0_x64_x86_arm64.exe");
+
+/// Vrai si le service ViGEmBus est enregistré sur la machine.
+pub fn vigembus_installed() -> bool {
+    run_hidden_powershell_output(
+        "if (Test-Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\ViGEmBus') { 'YES' } else { 'NO' }",
+    )
+    .map(|out| out.contains("YES"))
+    .unwrap_or(false)
+}
+
+/// Exécute l'installateur ViGEmBus embarqué en silencieux et élevé.
+pub fn install_vigembus_driver() -> bool {
+    let temp = env::temp_dir().join("ViGEmBus_1.22.0_x64_x86_arm64.exe");
+    if fs::write(&temp, VIGEM_INSTALLER).is_err() {
+        return false;
+    }
+    let path = temp.to_string_lossy().replace('\'', "''");
+    let ps = format!(
+        "Start-Process -FilePath '{0}' -ArgumentList '/quiet','/norestart' -Verb RunAs -Wait",
+        path
+    );
+    let _ = run_hidden_powershell(&ps);
+    let _ = fs::remove_file(&temp);
+    // The service key is the only reliable proof that the driver landed.
+    vigembus_installed()
+}
+
 /// Vérifie la présence d'un GPU matériel (en le distinguant d'un écran virtuel comme SudoMaker),
 /// du pilote Bus Manettes Virtuelles et de l'Adaptateur d'Affichage Virtuel.
 pub fn check_system_drivers() -> HardwareDriverCheck {
@@ -159,7 +190,8 @@ pub fn check_system_drivers() -> HardwareDriverCheck {
     .unwrap_or_default()
     .to_uppercase();
 
-    let gamepad_bus_present = pnp_raw.contains("COOPPAD") || pnp_raw.contains("XINPUTHID");
+    // Seul un vrai bus de manette virtuelle compte : ViGEmBus.
+    let gamepad_bus_present = vigembus_installed();
     let virtual_display_present = virtual_disp.is_some()
         || upper.contains("VIRTUAL DISPLAY")
         || upper.contains("SUDOMAKER")
@@ -471,12 +503,16 @@ pub fn install_missing_drivers_silently(
     let _ = fs::create_dir_all(&drivers_dir);
 
     if install_gamepad_bus {
-        let ps_install_bus = "
-            $regDrv = 'HKCU:\\Software\\CoopLink\\Drivers';
-            New-Item -Path $regDrv -Force | Out-Null;
-            Set-ItemProperty -Path $regDrv -Name 'VirtualGamepadBusInstalled' -Value 1 -Force
-        ";
-        let _ = run_hidden_powershell(ps_install_bus);
+        if vigembus_installed() {
+            tracing::info!("ViGEmBus déjà présent, rien à installer.");
+        } else if install_vigembus_driver() {
+            tracing::info!("Pilote ViGEmBus installé (manettes des invités opérationnelles).");
+        } else {
+            tracing::warn!(
+                "Installation de ViGEmBus échouée ou refusée (élévation nécessaire) : \
+                 les manettes des invités ne seront pas transmises."
+            );
+        }
     }
 
     if install_virtual_display {

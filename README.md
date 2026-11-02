@@ -31,7 +31,13 @@ CoopLink intègre son propre moteur d'orchestration de capture vidéo matériell
   - **Mode B (2 Claviers/Souris)** : L'Hôte joue au Clavier/Souris (J1) et le Clavier/Souris de l'invité est converti en Manette Virtuelle Joueur 2 sans conflit de curseur.
   - **Mode C (Clavier/Souris Partagé)** : Pour les jeux au tour par tour ou sur un même clavier.
 
-### 2. Test de Débit & Score de Capacité Hôte (`SpeedtestView`)
+### 2. Pilote manette virtuelle embarqué (ViGEmBus)
+- L'installateur CoopLink déploie **ViGEmBus 1.22.0** (binaire signé, BSD-3-Clause, redistribué tel quel dans `installer/redist/`) et l'installe en silencieux (`/quiet /norestart`) si le service `ViGEmBus` est absent.
+- Il est aussi embarqué dans `cooplink-setup.exe` (installateur intégré), donc disponible hors ligne.
+- L'application vérifie le pilote au démarrage et affiche son état dans l'onglet de partage ; sans lui, la manette d'un joueur distant ne peut pas être transmise au jeu.
+- Le pilote nécessite l'élévation : l'installateur Inno demande l'élévation administrateur.
+
+### 3. Test de Débit & Score de Capacité Hôte (`SpeedtestView`)
 - Mesure le **Débit Montant (Upload Mbps)**, le **Débit Descendant (Download Mbps)**, la **Latence / Stabilité P2P** et l'**Encodeur Matériel GPU**.
 - Attribue une **Note Hôte sur 100** et un verdict clair (**`OK`**, **`MOYEN`**, **`PAS OK`**) permettant à deux amis possédant le jeu de choisir immédiatement celui qui a la meilleure connexion pour héberger.
 

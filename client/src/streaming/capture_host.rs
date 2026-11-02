@@ -121,6 +121,18 @@ pub fn is_virtual_display_adapter_name(name: &str) -> bool {
         || u.contains("REMOTE DESKTOP")
 }
 
+/// True when the ViGEmBus driver answers, i.e. a virtual pad can actually be plugged.
+pub fn vigembus_available() -> bool {
+    #[cfg(windows)]
+    {
+        vigem_client::Client::connect().is_ok()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// Label shown in the UI when no explicit game has been picked.
 pub const FOLLOW_FOREGROUND_LABEL: &str =
     "Jeu actif au premier plan (Détection automatique DirectX / Vulkan)";
@@ -211,7 +223,7 @@ impl CoopCaptureHost {
             dynamic_bitrate_kbps: 30_000,
             quality_min: 42,
             quality_max: 90,
-            virtual_gamepad_driver_ready: true,
+            virtual_gamepad_driver_ready: vigembus_available(),
             virtual_display_driver_ready: true,
             anti_audio_echo_enabled: true,
             audio_capture_mode: AudioCaptureMode::ExclusiveGameProcessOnly,

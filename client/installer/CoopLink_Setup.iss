@@ -23,7 +23,7 @@ OutputBaseFilename=CoopLink_Setup_v1.0.0
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-PrivilegesRequired=lowest
+PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64
 
 [Languages]
@@ -33,15 +33,25 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "firewallrule"; Description: "Autoriser automatiquement CoopLink dans le Pare-feu Windows Defender"; GroupDescription: "Réseau et Sécurité:"
+Name: "vigembus"; Description: "Installer le pilote de manette virtuelle ViGEmBus (manettes des invités)"; GroupDescription: "Pilotes et périphériques"; Flags: checkedonce
 
 [Files]
 Source: "..\target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\installer\redist\ViGEmBus_1.22.0_x64_x86_arm64.exe"; DestDir: "{app}\redist"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
+Filename: "{app}\redist\ViGEmBus_1.22.0_x64_x86_arm64.exe"; Parameters: "/quiet /norestart"; StatusMsg: "Installation du pilote de manette virtuelle ViGEmBus..."; Flags: runhidden waituntilterminated; Check: (not ViGEmBusInstalled) and WizardIsTaskSelected('vigembus')
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+// Le pilote ViGEmBus est nécessaire pour les manettes des joueurs distants.
+function ViGEmBusInstalled: Boolean;
+begin
+  Result := RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\ViGEmBus');
+end;

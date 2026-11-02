@@ -482,6 +482,27 @@ impl StreamingView {
                     },
                 );
 
+                let driver_label = if engine.capture_host.virtual_gamepad_driver_ready {
+                    match lang {
+                        Language::Fr => "Manette virtuelle : pilote ViGEmBus détecté — la manette de l'invité sera transmise.",
+                        _ => "Virtual pad: ViGEmBus driver detected — the guest controller will be forwarded.",
+                    }
+                } else {
+                    match lang {
+                        Language::Fr => "Manette virtuelle : pilote ViGEmBus absent — relancez l'installateur CoopLink (case « pilote ViGEmBus »).",
+                        _ => "Virtual pad: ViGEmBus driver missing — rerun the CoopLink installer (ViGEmBus task).",
+                    }
+                };
+                ui.label(
+                    RichText::new(driver_label)
+                        .size(12.0)
+                        .color(if engine.capture_host.virtual_gamepad_driver_ready {
+                            ModernTheme::GREEN_VIVID
+                        } else {
+                            ModernTheme::ORANGE_CORAL
+                        }),
+                );
+
                 ui.add_space(8.0);
 
                 Self::render_input_mode_card(
@@ -1088,6 +1109,27 @@ impl StreamingView {
                         engine.coop_input_mode = CoopInputMode::MultiGamepad;
                         engine.stream_viewer.capture_mouse_keyboard = false;
                     },
+                );
+
+                let driver_label = if engine.capture_host.virtual_gamepad_driver_ready {
+                    match lang {
+                        Language::Fr => "Manette virtuelle : pilote ViGEmBus détecté — la manette de l'invité sera transmise.",
+                        _ => "Virtual pad: ViGEmBus driver detected — the guest controller will be forwarded.",
+                    }
+                } else {
+                    match lang {
+                        Language::Fr => "Manette virtuelle : pilote ViGEmBus absent — relancez l'installateur CoopLink (case « pilote ViGEmBus »).",
+                        _ => "Virtual pad: ViGEmBus driver missing — rerun the CoopLink installer (ViGEmBus task).",
+                    }
+                };
+                ui.label(
+                    RichText::new(driver_label)
+                        .size(12.0)
+                        .color(if engine.capture_host.virtual_gamepad_driver_ready {
+                            ModernTheme::GREEN_VIVID
+                        } else {
+                            ModernTheme::ORANGE_CORAL
+                        }),
                 );
 
                 ui.add_space(8.0);
