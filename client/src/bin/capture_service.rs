@@ -1056,25 +1056,40 @@ fn handle_client(
     // Une connexion directe doit s'authentifier tout de suite ; via le relais,
     // l'hôte peut attendre longtemps avant qu'un invité n'arrive.
     let _ = stream.set_read_timeout(Some(auth_timeout));
-    let mut line: Vec<u8> = Vec::new();
-    let mut byte = [0u8; 1];
-    while line.len() < 80 {
-        match stream.read(&mut byte) {
-            Ok(0) => break,
-            Ok(_) => {
-                if byte[0] == b'\n' {
+    // Le relais envoie d'abord son propre accusé (`OK`) : on ignore toute ligne
+    // qui n'est pas le jeton, plutôt que de rejeter la connexion.
+    let mut presented: Vec<u8> = Vec::new();
+    for _ in 0..6 {
+        let mut line: Vec<u8> = Vec::new();
+        let mut byte = [0u8; 1];
+        let mut closed = false;
+        while line.len() < 80 {
+            match stream.read(&mut byte) {
+                Ok(0) => {
+                    closed = true;
                     break;
                 }
-                line.push(byte[0]);
+                Ok(_) => {
+                    if byte[0] == b'\n' {
+                        break;
+                    }
+                    line.push(byte[0]);
+                }
+                Err(_) => {
+                    closed = true;
+                    break;
+                }
             }
-            Err(_) => break,
+        }
+        let text = String::from_utf8_lossy(&line).trim().to_string();
+        if let Some(token) = text.strip_prefix("AUTH ") {
+            presented = from_hex(token).unwrap_or_default();
+            break;
+        }
+        if closed {
+            break;
         }
     }
-    let presented = String::from_utf8_lossy(&line)
-        .trim()
-        .strip_prefix("AUTH ")
-        .and_then(from_hex)
-        .unwrap_or_default();
     if presented.is_empty() {
         debug!("Aucun jeton reçu de {} (délai d'authentification écoulé)", peer);
         return;
