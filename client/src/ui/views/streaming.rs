@@ -470,8 +470,8 @@ impl StreamingView {
                         Language::Pt => "Modo A — Com Comandos (2 a 4 Comandos independentes)",
                     },
                     match lang {
-                        Language::Fr => "Vous branchez vos manettes sur le PC hôte : le jeu les voit nativement (Joueur 1, 2, 3…). L'invité joue avec la manette branchée sur son propre PC, transmise en manette Joueur 2.",
-                        Language::En => "Plug your controllers into the host PC: the game sees them natively (Player 1, 2, 3…). The guest plays with the controller plugged into their own PC, forwarded as Player 2.",
+                        Language::Fr => "Vous branchez vos manettes sur le PC hôte : le jeu les voit nativement (Joueur 1, 2, 3…). La manette branchée chez l'invité n'est pas encore transmise : elle demande un pilote de manette virtuelle, non inclus.",
+                        Language::En => "Plug your controllers into the host PC: the game sees them natively (Player 1, 2, 3…). The guest's own controller is not forwarded yet: that requires a virtual gamepad driver, which is not bundled.",
                         Language::Es => "Tú eres el Jugador 1. Tu amigo se asigna automáticamente como Mando Jugador 2 (y Jugador 3/4). Cada uno controla su propio personaje sin conflictos.",
                         Language::De => "Du bist Spieler 1. Dein Freund wird automatisch als virtueller Controller Spieler 2 zugewiesen. Jeder steuert seinen eigenen Charakter ohne Konflikte.",
                         Language::Pt => "Você é o Jogador 1. O seu amigo é atribuído automaticamente como Comando Jogador 2. Cada um controla a sua personagem sem conflitos.",
