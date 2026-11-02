@@ -39,6 +39,9 @@ pub struct CoopStreamViewer {
     pub guest_mouse_enabled: bool,
     /// Forward the guest's own controller as a virtual pad on the host.
     pub guest_gamepad: bool,
+    /// Relay fallback (host behind CGNAT without IPv6).
+    pub relay_addr: String,
+    pub relay_room: String,
     pub multi_controller_support: bool,
     pub assigned_player_slot: u8,
 }
@@ -58,6 +61,8 @@ impl CoopStreamViewer {
             player_index: 1,
             guest_mouse_enabled: true,
             guest_gamepad: true,
+            relay_addr: String::new(),
+            relay_room: String::new(),
             multi_controller_support: true,
             assigned_player_slot: 2,
         }
@@ -141,6 +146,12 @@ impl CoopStreamViewer {
         }
         if !self.guest_gamepad {
             args.push("--no-gamepad");
+        }
+        if !self.relay_addr.trim().is_empty() {
+            args.push("--relay");
+            args.push(&self.relay_addr);
+            args.push("--room");
+            args.push(&self.relay_room);
         }
 
         for candidate in &exe_candidates {

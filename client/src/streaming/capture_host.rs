@@ -196,6 +196,10 @@ pub struct CoopCaptureHost {
     pub controller_slots: Vec<ControllerSlotAssignment>,
     pub service_port: u16,
     pub stream_port: u16,
+    /// Relay fallback used when the guest cannot reach the host directly.
+    pub relay_enabled: bool,
+    pub relay_addr: String,
+    pub relay_room: String,
     /// Process image of the game to capture (`Game.exe`). Empty = follow the foreground window.
     pub target_process: String,
     /// Window-title fragment used when `target_process` is empty.
@@ -249,6 +253,9 @@ impl CoopCaptureHost {
             }],
             service_port: DEFAULT_CONTROL_PORT,
             stream_port: DEFAULT_STREAM_PORT,
+            relay_enabled: false,
+            relay_addr: String::new(),
+            relay_room: String::new(),
             target_process: String::new(),
             target_title: String::new(),
             last_settings_path: None,
@@ -459,6 +466,9 @@ impl CoopCaptureHost {
             audio_volume: self.stream_audio_volume.min(100) as u8,
             encoder: self.active_encoder.as_engine_str().to_string(),
             stream_port: self.stream_port,
+            relay_enabled: self.relay_enabled,
+            relay_addr: self.relay_addr.clone(),
+            relay_room: self.relay_room.clone(),
             ..StreamSettings::default()
         };
         settings.clamp();

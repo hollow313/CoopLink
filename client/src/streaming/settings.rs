@@ -122,6 +122,15 @@ pub struct StreamSettings {
     /// Access token shared with the display client (empty = accept any peer).
     #[serde(default)]
     pub access_token: String,
+    /// Fallback path when the host cannot be reached directly (CGNAT, no IPv6).
+    #[serde(default)]
+    pub relay_enabled: bool,
+    /// Relay endpoint (`hub.example.com:47510`).
+    #[serde(default)]
+    pub relay_addr: String,
+    /// Room code used to pair host and guest on the relay.
+    #[serde(default)]
+    pub relay_room: String,
 }
 
 impl Default for StreamSettings {
@@ -144,6 +153,9 @@ impl Default for StreamSettings {
             keep_target_focused: true,
             encoder: String::new(),
             access_token: String::new(),
+            relay_enabled: false,
+            relay_addr: String::new(),
+            relay_room: String::new(),
         }
     }
 }

@@ -51,6 +51,10 @@ struct ViewerArgs {
     mouse: bool,
     /// Forward the guest's XInput pad to the host's virtual controller.
     gamepad: bool,
+    /// Relay endpoint used when the host is not directly reachable.
+    relay: Option<String>,
+    /// Room code that pairs us with the host on the relay.
+    room: String,
 }
 
 impl Default for ViewerArgs {
@@ -69,6 +73,8 @@ impl Default for ViewerArgs {
             player: 1,
             mouse: true,
             gamepad: true,
+            relay: None,
+            room: String::new(),
         }
     }
 }
@@ -130,6 +136,16 @@ fn parse_args() -> ViewerArgs {
             "--view-only" => args.send_input = false,
             "--no-mouse" => args.mouse = false,
             "--no-gamepad" => args.gamepad = false,
+            "--relay" => {
+                if let Some(v) = next(&mut i) {
+                    args.relay = Some(v);
+                }
+            }
+            "--room" => {
+                if let Some(v) = next(&mut i) {
+                    args.room = v;
+                }
+            }
             "--player" => {
                 if let Some(v) = next(&mut i) {
                     args.player = v.parse().unwrap_or(1);
@@ -425,6 +441,31 @@ fn start_gamepad_forwarding(tcp_tx: Arc<Mutex<Option<TcpStream>>>, running: Arc<
 #[cfg(not(windows))]
 fn start_gamepad_forwarding(_tx: Arc<Mutex<Option<TcpStream>>>, _running: Arc<AtomicBool>) {}
 
+/// Envoie `HELLO guest <room>` et attend `OK` : le relais confirme qu'un hôte attend.
+fn relay_handshake(stream: &mut TcpStream, room: &str) -> bool {
+    if stream
+        .write_all(format!("HELLO guest {}\n", room).as_bytes())
+        .is_err()
+    {
+        return false;
+    }
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    while line.len() < 16 {
+        match stream.read(&mut byte) {
+            Ok(0) => break,
+            Ok(_) => {
+                if byte[0] == b'\n' {
+                    break;
+                }
+                line.push(byte[0]);
+            }
+            Err(_) => return false,
+        }
+    }
+    String::from_utf8_lossy(&line).trim() == "OK"
+}
+
 impl ViewerApp {
     fn new(args: ViewerArgs) -> Self {
         let state = Arc::new(Mutex::new(ViewerState {
@@ -459,21 +500,33 @@ impl ViewerApp {
         thread::spawn(move || {
             // The host may be an IPv4 literal, a bare IPv6 literal or an already
             // bracketed IPv6 endpoint. format_endpoint keeps both cases valid.
+            // Direct first (IPv4 or IPv6), relay only as a fallback.
             let primary = stream_settings::format_endpoint(&host, port);
-            let candidates = vec![
-                primary,
-                format!("[fe80::1]:{}", port),
-                format!("10.244.0.1:{}", port),
-                format!("127.0.0.1:{}", port),
+            let mut candidates: Vec<(String, bool)> = vec![
+                (primary, false),
+                (format!("10.244.0.1:{}", port), false),
+                (format!("127.0.0.1:{}", port), false),
             ];
+            if let Some(relay) = args.relay.clone() {
+                if !relay.trim().is_empty() {
+                    candidates.push((stream_settings::format_endpoint(&relay, 47510), true));
+                }
+            }
+            let relay_room = args.room.clone();
 
             while running_conn.load(Ordering::Relaxed) {
                 let mut connected = None;
-                for candidate in &candidates {
+                for (candidate, is_relay) in &candidates {
                     if let Ok(addr) = candidate.parse::<SocketAddr>() {
-                        if let Ok(s) =
+                        if let Ok(mut s) =
                             TcpStream::connect_timeout(&addr, Duration::from_millis(1200))
                         {
+                            if *is_relay {
+                                let _ = s.set_read_timeout(Some(Duration::from_millis(2000)));
+                                if !relay_handshake(&mut s, &relay_room) {
+                                    continue;
+                                }
+                            }
                             connected = Some((s, candidate.clone()));
                             break;
                         }

@@ -74,8 +74,18 @@ impl NetworkTunnel {
 
         let session_key = derive_session_key(&room_code, &room_password);
 
-        let bind_addr = format!("0.0.0.0:{}", port);
-        let socket = Arc::new(UdpSocket::bind(&bind_addr).await?);
+        // Dual-stack: an IPv6 socket also accepts IPv4-mapped peers on Windows, which
+        // keeps the tunnel usable when the public IPv4 is shared (CGNAT).
+        let bind_addr = format!("[::]:{}", port);
+        let socket = Arc::new(match UdpSocket::bind(&bind_addr).await {
+            Ok(s) => s,
+            Err(_) => {
+                let fallback = format!("0.0.0.0:{}", port);
+                let s = UdpSocket::bind(&fallback).await?;
+                info!("Tunnel UDP en IPv4 seul ({} indisponible)", bind_addr);
+                s
+            }
+        });
         *self.host_socket.write() = Some(socket.clone());
         *self.active_session_key.write() = Some(session_key);
         info!(
@@ -524,7 +534,11 @@ impl NetworkTunnel {
         let auth_tag = compute_handshake_auth_tag(&room_code, &room_password, &player_name);
         let auth_hex = hex_encode(&auth_tag);
 
-        let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
+        let socket = match UdpSocket::bind("[::]:0").await {
+            Ok(s) => s,
+            Err(_) => UdpSocket::bind("0.0.0.0:0").await?,
+        };
+        let socket = Arc::new(socket);
         info!("CoopLink Client AEAD initialisé sur {}", socket.local_addr()?);
 
         // Envoi du Handshake Request chiffré AEAD

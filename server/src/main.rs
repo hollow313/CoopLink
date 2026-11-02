@@ -4,6 +4,7 @@
 
 mod config;
 mod hub;
+mod relay;
 mod web;
 
 use config::ServerConfig;
@@ -28,6 +29,17 @@ async fn main() -> anyhow::Result<()> {
     // Initialisation du Hub central UDP (port 30024 par défaut)
     let hub = Arc::new(ServerHub::new(config.udp_port));
     hub.clone().start().await?;
+
+    // Relais TCP (repli quand l'hôte est derrière une IPv4 mutualisée sans IPv6).
+    let relay_port: u16 = std::env::var("PORT_RELAY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(47510);
+    tokio::spawn(async move {
+        if let Err(e) = relay::start(relay_port).await {
+            tracing::error!("Relais CoopLink indisponible sur {} : {}", relay_port, e);
+        }
+    });
 
     // Lancement du Serveur Web d'Administration (port 30025 par défaut)
     let hub_for_web = hub.clone();

@@ -1116,6 +1116,7 @@ impl eframe::App for CoopLinkApp {
                     );
                 }
                 if on_start_host_stream {
+                    self.apply_relay_settings();
                     let vip = self.state.virtual_ip.unwrap_or(self.config.host_virtual_ip);
                     let app_target = self.streaming_engine.selected_app_name.clone();
                     let _ = self.streaming_engine.capture_host.start_daemon(vip, &app_target);
@@ -1135,6 +1136,7 @@ impl eframe::App for CoopLinkApp {
                     self.add_log(LogLevel::Warning, "Partage de jeu arrêté.");
                 }
                 if on_start_client_stream {
+                    self.apply_relay_settings();
                     let my_cur_vip = self.state.virtual_ip.unwrap_or(if self.state.role == NodeRole::Host {
                         self.config.host_virtual_ip
                     } else {
@@ -1201,6 +1203,49 @@ impl eframe::App for CoopLinkApp {
 }
 
 impl CoopLinkApp {
+    /// Endpoint du relais public (hub CoopLink), port 47510.
+    fn relay_endpoint(&self) -> String {
+        let raw = if !self.config.central_server_address.trim().is_empty() {
+            self.config.central_server_address.clone()
+        } else {
+            self.config.remote_server_address.clone()
+        };
+        let host = raw
+            .split("://")
+            .last()
+            .unwrap_or(&raw)
+            .split('/')
+            .next()
+            .unwrap_or("")
+            .split(':')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if host.is_empty() {
+            String::new()
+        } else {
+            format!("{}:47510", host)
+        }
+    }
+
+    /// Active le repli relais pour la session en cours (hôte et invité).
+    fn apply_relay_settings(&mut self) {
+        let endpoint = self.relay_endpoint();
+        if endpoint.is_empty() {
+            return;
+        }
+        let room = self.state.room_code.trim().to_uppercase();
+        if room.is_empty() {
+            return;
+        }
+        self.streaming_engine.capture_host.relay_enabled = true;
+        self.streaming_engine.capture_host.relay_addr = endpoint.clone();
+        self.streaming_engine.capture_host.relay_room = room.clone();
+        self.streaming_engine.stream_viewer.relay_addr = endpoint;
+        self.streaming_engine.stream_viewer.relay_room = room;
+    }
+
     fn start_host_node(&mut self) {
         self.state.status = ConnectionStatus::Hosting;
         self.state.role = NodeRole::Host;
@@ -1267,6 +1312,7 @@ impl CoopLinkApp {
         );
 
         // Démarre automatiquement le service de capture et streaming en tâche de fond
+        self.apply_relay_settings();
         let app_target = self.streaming_engine.selected_app_name.clone();
         let _ = self.streaming_engine.capture_host.start_daemon(host_ip, &app_target);
 

@@ -1483,6 +1483,51 @@ fn main() {
         },
     };
 
+    // ---- relay fallback ---------------------------------------------------
+    // When the guest cannot reach us directly (shared IPv4, no IPv6), we dial the
+    // relay ourselves and serve that connection exactly like an inbound client.
+    if settings.relay_enabled
+        && !settings.relay_addr.trim().is_empty()
+        && !settings.relay_room.trim().is_empty()
+    {
+        let relay_addr = settings.relay_addr.clone();
+        let relay_room = settings.relay_room.clone();
+        let settings_for_relay = settings.clone();
+        let frames_r = frames.clone();
+        let audio_r = audio.clone();
+        let stats_r = stats.clone();
+        let running_r = running.clone();
+        let target_r = target.clone();
+        info!(
+            "Relais actif : {} (salon {}) — repli si la connexion directe échoue.",
+            relay_addr, relay_room
+        );
+        thread::spawn(move || loop {
+            if !running_r.load(Ordering::Relaxed) {
+                break;
+            }
+            match TcpStream::connect(&relay_addr) {
+                Ok(mut stream) => {
+                    let hello = format!("HELLO host {}\n", relay_room);
+                    if stream.write_all(hello.as_bytes()).is_ok() {
+                        info!("Relais connecté ({}), en attente d'un invité.", relay_addr);
+                        handle_client(
+                            stream,
+                            settings_for_relay.clone(),
+                            frames_r.clone(),
+                            audio_r.clone(),
+                            stats_r.clone(),
+                            running_r.clone(),
+                            target_r.clone(),
+                        );
+                    }
+                }
+                Err(e) => warn!("Relais {} injoignable : {}", relay_addr, e),
+            }
+            thread::sleep(Duration::from_secs(10));
+        });
+    }
+
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
