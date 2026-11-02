@@ -745,7 +745,7 @@ impl eframe::App for CoopLinkApp {
 
         if let Some(ref rx) = self.reachability_rx {
             if let Ok(report) = rx.try_recv() {
-                let port = crate::streaming::settings::DEFAULT_STREAM_PORT;
+                let port = self.config.listen_port;
                 self.state.share_endpoint = report.endpoint(port);
                 self.state.reachability_label = report.summary();
                 self.state.reachability_ipv6 = report.uses_ipv6();
@@ -780,7 +780,7 @@ impl eframe::App for CoopLinkApp {
                         self.state.share_endpoint = format!(
                             "[{}]:{}",
                             v6,
-                            crate::streaming::settings::DEFAULT_STREAM_PORT
+                            self.config.listen_port
                         );
                         self.state.reachability_ipv6 = true;
                         self.state.reachability_label = Reachability::SharedV4.summary_for(Some(v6));

@@ -141,6 +141,21 @@ pub fn detect(upnp_external: Option<Ipv4Addr>, upnp_active: bool) -> Reachabilit
 
 /// Première adresse IPv6 globale (2000::/3), hors lien-local et hors loopback.
 pub fn first_global_ipv6() -> Option<Ipv6Addr> {
+    // 1. L'adresse que le système choisirait réellement pour sortir vers Internet
+    //    (celle de l'interface qui porte la route par défaut). C'est la seule qui soit
+    //    joignable de l'extérieur : un Get-NetIPAddress brut peut renvoyer l'adresse
+    //    d'un adaptateur virtuel (Hyper-V, VPN, Tailscale) que le pair ne peut pas joindre.
+    if let Ok(socket) = UdpSocket::bind("[::]:0") {
+        if socket.connect("[2001:4860:4860::8888]:53").is_ok() {
+            if let Ok(SocketAddr::V6(addr)) = socket.local_addr() {
+                let ip = *addr.ip();
+                if is_global_v6(ip) {
+                    return Some(ip);
+                }
+            }
+        }
+    }
+
     #[cfg(windows)]
     {
         let ps = "Get-NetIPAddress -AddressFamily IPv6 -ErrorAction SilentlyContinue | \
@@ -160,17 +175,6 @@ pub fn first_global_ipv6() -> Option<Ipv6Addr> {
         }
     }
 
-    // Portable: l'adresse locale d'une socket routée vers un résolveur IPv6 public.
-    if let Ok(socket) = UdpSocket::bind("[::]:0") {
-        if socket.connect("[2001:4860:4860::8888]:53").is_ok() {
-            if let Ok(SocketAddr::V6(addr)) = socket.local_addr() {
-                let ip = *addr.ip();
-                if is_global_v6(ip) {
-                    return Some(ip);
-                }
-            }
-        }
-    }
     None
 }
 
