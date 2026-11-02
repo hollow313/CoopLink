@@ -553,6 +553,11 @@ impl NetworkTunnel {
             }
         }
 
+        // Endpoint courant de l'hôte. Il est re-verrouillé sur la première réponse AEAD
+        // valide : sur une machine multi-hébergée (plusieurs IPv6), le noyau peut répondre
+        // depuis une autre adresse que celle visée par le client.
+        let host_endpoint = Arc::new(RwLock::new(server_addr));
+
         // Envoi du Handshake Request chiffré AEAD
         let req = CoopPacket::HandshakeRequest {
             player_name: player_name.clone(),
@@ -603,24 +608,51 @@ impl NetworkTunnel {
         let conn_status_holder = self.conn_status.clone();
         let last_err_holder = self.last_error.clone();
         let rx_counter = self.bytes_rx.clone();
+        let host_ep_rx = host_endpoint.clone();
 
-        // Tâche de réception client (vérifie strictement src_endpoint == server_addr + AEAD)
+        // Tâche de réception client : AEAD obligatoire, et endpoint de l'hôte verrouillé
+        // sur la première réponse valide (une machine multi-hébergée peut répondre depuis
+        // une autre de ses adresses que celle visée).
         tokio::spawn(async move {
             let mut buf = vec![0u8; 65535];
             while running_flag.load(Ordering::Relaxed) {
                 match socket_rx.recv_from(&mut buf).await {
                     Ok((len, src_endpoint)) => {
-                        // Sécurité Client : Ignore tout paquet ne provenant pas de l'adresse du serveur hôte
-                        if src_endpoint != server_addr {
-                            debug!(
-                                "Paquet ignoré depuis une source tierce non autorisée: {} (attendu: {})",
-                                src_endpoint, server_addr
-                            );
-                            continue;
+                        rx_counter.fetch_add(len as u64, Ordering::Relaxed);
+                        let decoded = CoopPacket::decode_encrypted(&buf[..len], &session_key);
+
+                        let locked = *host_ep_rx.read();
+                        if src_endpoint != locked {
+                            let adoptable = matches!(
+                                &decoded,
+                                Ok(CoopPacket::HandshakeResponse { success: true, .. })
+                            ) && *conn_status_holder.read() == ConnectionStatus::Connecting;
+                            if adoptable {
+                                *host_ep_rx.write() = src_endpoint;
+                                info!(
+                                    "Réponse de l'hôte reçue depuis {} (adresse visée : {}) : endpoint verrouillé.",
+                                    src_endpoint, locked
+                                );
+                            } else {
+                                // Un paquet qui se déchiffre mais vient d'une autre adresse :
+                                // c'est le symptôme d'un hôte multi-hébergé. On le signale au
+                                // lieu de rester silencieux (le pair, lui, nous voit connecté).
+                                if decoded.is_ok() {
+                                    warn!(
+                                        "Paquet AEAD valide ignoré : émis depuis {} alors que l'hôte est {}",
+                                        src_endpoint, locked
+                                    );
+                                } else {
+                                    debug!(
+                                        "Paquet ignoré depuis une source tierce: {} (attendu: {})",
+                                        src_endpoint, locked
+                                    );
+                                }
+                                continue;
+                            }
                         }
 
-                        rx_counter.fetch_add(len as u64, Ordering::Relaxed);
-                        if let Ok(packet) = CoopPacket::decode_encrypted(&buf[..len], &session_key) {
+                        if let Ok(packet) = decoded {
                             match packet {
                                 CoopPacket::HandshakeResponse {
                                     success,
@@ -718,6 +750,7 @@ impl NetworkTunnel {
         // Envoi des paquets IP locaux vers le serveur
         let running_fwd = self.running.clone();
         let socket_fwd = socket.clone();
+        let host_ep_fwd = host_endpoint.clone();
         let my_vip_fwd = self.my_virtual_ip.clone();
 
         tokio::spawn(async move {
@@ -737,7 +770,8 @@ impl NetworkTunnel {
                             payload: data,
                         }
                         .encode_encrypted(&session_key);
-                        let _ = socket_fwd.send_to(&pkt, server_addr).await;
+                        let host_ep = *host_ep_fwd.read();
+                        let _ = socket_fwd.send_to(&pkt, host_ep).await;
                     }
                 } else {
                     break;
@@ -748,6 +782,7 @@ impl NetworkTunnel {
         // Relais des broadcasts de jeux émis localement vers le serveur
         let running_bcast = self.running.clone();
         let socket_bcast = socket.clone();
+        let host_ep_bcast = host_endpoint.clone();
         let my_vip_bcast = self.my_virtual_ip.clone();
 
         tokio::spawn(async move {
@@ -761,7 +796,8 @@ impl NetworkTunnel {
                             payload,
                         }
                         .encode_encrypted(&session_key);
-                        let _ = socket_bcast.send_to(&pkt, server_addr).await;
+                        let host_ep = *host_ep_bcast.read();
+                        let _ = socket_bcast.send_to(&pkt, host_ep).await;
                     }
                 } else {
                     break;
@@ -773,6 +809,7 @@ impl NetworkTunnel {
         let running_ping = self.running.clone();
         let status_ping = self.conn_status.clone();
         let socket_ping = socket.clone();
+        let host_ep_ping = host_endpoint.clone();
         let peers_ping = self.peers.clone();
         let last_err_ping = self.last_error.clone();
         let my_vip_ping = self.my_virtual_ip.clone();
@@ -791,7 +828,8 @@ impl NetworkTunnel {
                         timestamp_ms: now_ms,
                     }
                     .encode_encrypted(&session_key);
-                    let _ = socket_ping.send_to(&ping_pkt, server_addr).await;
+                    let host_ep = *host_ep_ping.read();
+                    let _ = socket_ping.send_to(&ping_pkt, host_ep).await;
 
                     // Surveillance Heartbeat : si aucun paquet de l'Hôte n'a été reçu depuis plus de 4.5s
                     let last_seen = peers_ping.read().get(&1).map(|p| p.last_seen_secs).unwrap_or(0);
