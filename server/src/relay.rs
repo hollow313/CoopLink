@@ -73,8 +73,15 @@ async fn handle(mut stream: TcpStream, addr: SocketAddr, waiting: Waiting) -> an
 
     match role.as_str() {
         "host" => {
-            info!("Relais : hôte en attente pour le salon {} ({})", room, addr);
             let mut map = waiting.lock().await;
+            map.retain(|_, p| p.since.elapsed() < Duration::from_secs(1800));
+            if map.len() >= 512 {
+                drop(map);
+                warn!("Relais : capacité d'attente saturée, hôte {} refusé", addr);
+                let _ = stream.write_all(b"BUSY\n").await;
+                return Ok(());
+            }
+            info!("Relais : hôte en attente pour le salon {} ({})", room, addr);
             map.insert(
                 room,
                 Pending {

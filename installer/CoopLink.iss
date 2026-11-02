@@ -27,7 +27,6 @@ Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
-PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesInstallIn64BitMode=x64
 ArchitecturesAllowed=x64compatible
 MinVersion=10.0.17763

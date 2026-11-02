@@ -131,6 +131,10 @@ pub struct StreamSettings {
     /// Room code used to pair host and guest on the relay.
     #[serde(default)]
     pub relay_room: String,
+    /// Clé de diffusion dérivée du salon (hex, 32 octets). Vide = session non
+    /// authentifiable : le service génère une clé aléatoire et refuse tout le monde.
+    #[serde(default)]
+    pub auth_key_hex: String,
 }
 
 impl Default for StreamSettings {
@@ -156,6 +160,7 @@ impl Default for StreamSettings {
             relay_enabled: false,
             relay_addr: String::new(),
             relay_room: String::new(),
+            auth_key_hex: String::new(),
         }
     }
 }

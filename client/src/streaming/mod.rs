@@ -1,6 +1,7 @@
 pub mod capture_host;
 pub mod pairing;
 pub mod settings;
+pub mod stream_crypto;
 pub mod stream_viewer;
 pub mod window_list;
 

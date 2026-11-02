@@ -42,6 +42,8 @@ pub struct CoopStreamViewer {
     /// Relay fallback (host behind CGNAT without IPv6).
     pub relay_addr: String,
     pub relay_room: String,
+    /// Clé de session (hex) transmise au lecteur pour s'authentifier et déchiffrer.
+    pub auth_key_hex: String,
     pub multi_controller_support: bool,
     pub assigned_player_slot: u8,
 }
@@ -63,6 +65,7 @@ impl CoopStreamViewer {
             guest_gamepad: true,
             relay_addr: String::new(),
             relay_room: String::new(),
+            auth_key_hex: String::new(),
             multi_controller_support: true,
             assigned_player_slot: 2,
         }
@@ -146,6 +149,10 @@ impl CoopStreamViewer {
         }
         if !self.guest_gamepad {
             args.push("--no-gamepad");
+        }
+        if !self.auth_key_hex.trim().is_empty() {
+            args.push("--key");
+            args.push(&self.auth_key_hex);
         }
         if !self.relay_addr.trim().is_empty() {
             args.push("--relay");

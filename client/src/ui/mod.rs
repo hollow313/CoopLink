@@ -1229,14 +1229,21 @@ impl CoopLinkApp {
         }
     }
 
-    /// Active le repli relais pour la session en cours (hôte et invité).
+    /// Prépare la session : clé d'authentification/chiffrement + repli relais.
     fn apply_relay_settings(&mut self) {
-        let endpoint = self.relay_endpoint();
-        if endpoint.is_empty() {
-            return;
-        }
         let room = self.state.room_code.trim().to_uppercase();
         if room.is_empty() {
+            return;
+        }
+
+        // Clé dérivée du salon : l'invité doit la connaître pour être accepté.
+        let key = crate::streaming::stream_crypto::derive_key(&room, &self.config.room_password);
+        let key_hex = crate::streaming::stream_crypto::to_hex(&key);
+        self.streaming_engine.capture_host.auth_key_hex = key_hex.clone();
+        self.streaming_engine.stream_viewer.auth_key_hex = key_hex;
+
+        let endpoint = self.relay_endpoint();
+        if endpoint.is_empty() {
             return;
         }
         self.streaming_engine.capture_host.relay_enabled = true;

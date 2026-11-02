@@ -200,6 +200,8 @@ pub struct CoopCaptureHost {
     pub relay_enabled: bool,
     pub relay_addr: String,
     pub relay_room: String,
+    /// Clé de diffusion (hex) : dérivée du salon côté UI, vérifiée par le service.
+    pub auth_key_hex: String,
     /// Process image of the game to capture (`Game.exe`). Empty = follow the foreground window.
     pub target_process: String,
     /// Window-title fragment used when `target_process` is empty.
@@ -256,6 +258,7 @@ impl CoopCaptureHost {
             relay_enabled: false,
             relay_addr: String::new(),
             relay_room: String::new(),
+            auth_key_hex: String::new(),
             target_process: String::new(),
             target_title: String::new(),
             last_settings_path: None,
@@ -469,6 +472,7 @@ impl CoopCaptureHost {
             relay_enabled: self.relay_enabled,
             relay_addr: self.relay_addr.clone(),
             relay_room: self.relay_room.clone(),
+            auth_key_hex: self.auth_key_hex.clone(),
             ..StreamSettings::default()
         };
         settings.clamp();

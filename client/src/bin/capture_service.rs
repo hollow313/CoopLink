@@ -6,6 +6,8 @@
 
 #[path = "../streaming/settings.rs"]
 mod stream_settings;
+#[path = "../streaming/stream_crypto.rs"]
+mod stream_crypto;
 
 use parking_lot::Mutex;
 use std::collections::{HashSet, VecDeque};
@@ -20,7 +22,8 @@ use stream_settings::{
     FpsLadder, RateControl, RateController, StreamSettings, StreamStats, FRAME_HEADER_LEN,
     FRAME_KIND_AUDIO, FRAME_KIND_VIDEO, FRAME_MAGIC, MAX_FRAME_BYTES,
 };
-use tracing::{error, info, warn};
+use stream_crypto::{auth_token, constant_time_eq, from_hex, StreamCipher};
+use tracing::{debug, error, info, warn};
 
 // ---------------------------------------------------------------------------
 // Shared state
@@ -1023,15 +1026,69 @@ fn handle_client(
     stats: Arc<LiveStats>,
     running: Arc<AtomicBool>,
     target: Arc<Mutex<engine::CaptureTarget>>,
+    auth_timeout: Duration,
 ) {
     let peer = stream
         .peer_addr()
         .map(|a| a.to_string())
         .unwrap_or_else(|_| "inconnu".to_string());
-    info!("Client de diffusion connecté : {}", peer);
     let _ = stream.set_nodelay(true);
     // A slow peer must never freeze the encoder.
     let _ = stream.set_write_timeout(Some(Duration::from_millis(80)));
+
+    // --- clé de session + authentification ------------------------------
+    let key: [u8; 32] = match from_hex(&settings.auth_key_hex) {
+        Some(raw) if raw.len() == 32 => {
+            let mut k = [0u8; 32];
+            k.copy_from_slice(&raw);
+            k
+        }
+        _ => {
+            warn!(
+                "Aucune clé de session fournie : le service génère une clé aléatoire, \
+                 aucun invité ne pourra s'authentifier."
+            );
+            rand::random()
+        }
+    };
+    let cipher = StreamCipher::new(&key);
+
+    // Une connexion directe doit s'authentifier tout de suite ; via le relais,
+    // l'hôte peut attendre longtemps avant qu'un invité n'arrive.
+    let _ = stream.set_read_timeout(Some(auth_timeout));
+    let mut line: Vec<u8> = Vec::new();
+    let mut byte = [0u8; 1];
+    while line.len() < 80 {
+        match stream.read(&mut byte) {
+            Ok(0) => break,
+            Ok(_) => {
+                if byte[0] == b'\n' {
+                    break;
+                }
+                line.push(byte[0]);
+            }
+            Err(_) => break,
+        }
+    }
+    let presented = String::from_utf8_lossy(&line)
+        .trim()
+        .strip_prefix("AUTH ")
+        .and_then(from_hex)
+        .unwrap_or_default();
+    if presented.is_empty() {
+        debug!("Aucun jeton reçu de {} (délai d'authentification écoulé)", peer);
+        return;
+    }
+    if !constant_time_eq(&presented, &auth_token(&key)) {
+        warn!("Connexion refusée : jeton de session invalide ({})", peer);
+        let _ = stream.write_all(b"DENY\n");
+        return;
+    }
+    if stream.write_all(b"OK\n").is_err() {
+        return;
+    }
+    info!("Client de diffusion authentifié : {}", peer);
+    let _ = stream.set_read_timeout(None);
 
     stats.clients.fetch_add(1, Ordering::Relaxed);
     let mut pad = VirtualPad::open();
@@ -1140,26 +1197,28 @@ fn handle_client(
             };
 
             if let Some(jpeg) = encode_frame(&frame.rgb, frame.width, frame.height, quality) {
-                if jpeg.len() <= MAX_FRAME_BYTES {
+                if let Some(payload) = cipher.seal(&jpeg) {
+                if payload.len() <= MAX_FRAME_BYTES {
                     let mut header = [0u8; FRAME_HEADER_LEN];
                     write_header(
                         &mut header,
                         FRAME_KIND_VIDEO,
                         frame.width as u16,
                         frame.height as u16,
-                        jpeg.len() as u32,
+                        payload.len() as u32,
                     );
+                    header[5] = 1; // chiffré
                     let sent = stream
                         .write_all(&header)
-                        .and_then(|_| stream.write_all(&jpeg))
+                        .and_then(|_| stream.write_all(&payload))
                         .and_then(|_| stream.flush());
                     match sent {
                         Ok(()) => {
-                            window_bits += (jpeg.len() as u64 + FRAME_HEADER_LEN as u64) * 8;
+                            window_bits += (payload.len() as u64 + FRAME_HEADER_LEN as u64) * 8;
                             stats.frames_sent.fetch_add(1, Ordering::Relaxed);
                             stats
                                 .bytes_sent
-                                .fetch_add(jpeg.len() as u64, Ordering::Relaxed);
+                                .fetch_add(payload.len() as u64, Ordering::Relaxed);
                             stats.quality.store(quality, Ordering::Relaxed);
                         }
                         Err(e) => {
@@ -1173,22 +1232,27 @@ fn handle_client(
                         }
                     }
                 }
+                }
             }
 
             if settings.audio_enabled {
                 let (chunks, rate, channels) = audio.take_since(&mut audio_cursor);
                 for chunk in chunks {
+                    let Some(payload) = cipher.seal(&chunk) else {
+                        continue;
+                    };
                     let mut header = [0u8; FRAME_HEADER_LEN];
                     write_header(
                         &mut header,
                         FRAME_KIND_AUDIO,
                         channels as u16,
                         (rate / 1000) as u16,
-                        chunk.len() as u32,
+                        payload.len() as u32,
                     );
+                    header[5] = 1; // chiffré
                     if stream
                         .write_all(&header)
-                        .and_then(|_| stream.write_all(&chunk))
+                        .and_then(|_| stream.write_all(&payload))
                         .is_err()
                     {
                         break;
@@ -1312,6 +1376,12 @@ fn main() {
 
             while running.load(Ordering::Relaxed) {
                 let started = Instant::now();
+
+                // Personne ne regarde : inutile de capturer et d'allouer 8 Mo par image.
+                if stats.clients.load(Ordering::Relaxed) == 0 {
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
 
                 if last_file_check.elapsed() > Duration::from_millis(500) {
                     last_file_check = Instant::now();
@@ -1508,6 +1578,15 @@ fn main() {
             }
             match TcpStream::connect(&relay_addr) {
                 Ok(mut stream) => {
+                    // Empêche le NAT de couper une socket muette pendant l'attente.
+                    {
+                        use socket2::{SockRef, TcpKeepalive};
+                        let _ = SockRef::from(&stream).set_tcp_keepalive(
+                            &TcpKeepalive::new()
+                                .with_time(Duration::from_secs(30))
+                                .with_interval(Duration::from_secs(10)),
+                        );
+                    }
                     let hello = format!("HELLO host {}\n", relay_room);
                     if stream.write_all(hello.as_bytes()).is_ok() {
                         info!("Relais connecté ({}), en attente d'un invité.", relay_addr);
@@ -1519,6 +1598,7 @@ fn main() {
                             stats_r.clone(),
                             running_r.clone(),
                             target_r.clone(),
+                            Duration::from_secs(1800),
                         );
                     }
                 }
@@ -1538,7 +1618,16 @@ fn main() {
                 let running = running.clone();
                 let target = target.clone();
                 thread::spawn(move || {
-                    handle_client(stream, settings, frames, audio, stats, running, target)
+                    handle_client(
+                        stream,
+                        settings,
+                        frames,
+                        audio,
+                        stats,
+                        running,
+                        target,
+                        Duration::from_secs(5),
+                    )
                 });
             }
             Err(e) => warn!("Connexion entrante refusée : {}", e),

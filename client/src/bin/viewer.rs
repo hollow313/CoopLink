@@ -6,6 +6,8 @@
 
 #[path = "../streaming/settings.rs"]
 mod stream_settings;
+#[path = "../streaming/stream_crypto.rs"]
+mod stream_crypto;
 
 use eframe::egui::{
     self, Color32, FontId, Key, Pos2, Rect, RichText, Rounding, TextureHandle, TextureOptions,
@@ -55,6 +57,8 @@ struct ViewerArgs {
     relay: Option<String>,
     /// Room code that pairs us with the host on the relay.
     room: String,
+    /// Clé de session (hex) : authentifie l'invité et déchiffre les trames.
+    key: Option<String>,
 }
 
 impl Default for ViewerArgs {
@@ -75,6 +79,7 @@ impl Default for ViewerArgs {
             gamepad: true,
             relay: None,
             room: String::new(),
+            key: None,
         }
     }
 }
@@ -144,6 +149,11 @@ fn parse_args() -> ViewerArgs {
             "--room" => {
                 if let Some(v) = next(&mut i) {
                     args.room = v;
+                }
+            }
+            "--key" => {
+                if let Some(v) = next(&mut i) {
+                    args.key = Some(v);
                 }
             }
             "--player" => {
@@ -466,6 +476,25 @@ fn relay_handshake(stream: &mut TcpStream, room: &str) -> bool {
     String::from_utf8_lossy(&line).trim() == "OK"
 }
 
+/// Lit une ligne courte de statut (`OK`, `DENY`) envoyée par l'hôte.
+fn read_status_line(stream: &mut TcpStream) -> String {
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    while line.len() < 16 {
+        match stream.read(&mut byte) {
+            Ok(0) => break,
+            Ok(_) => {
+                if byte[0] == b'\n' {
+                    break;
+                }
+                line.push(byte[0]);
+            }
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&line).trim().to_string()
+}
+
 impl ViewerApp {
     fn new(args: ViewerArgs) -> Self {
         let state = Arc::new(Mutex::new(ViewerState {
@@ -496,6 +525,17 @@ impl ViewerApp {
         let host = args.host.clone();
         let port = args.port;
         let requested_kbps = args.bitrate_kbps;
+        let session_key: Option<[u8; 32]> = args
+            .key
+            .as_deref()
+            .and_then(stream_crypto::from_hex)
+            .filter(|k| k.len() == 32)
+            .map(|k| {
+                let mut key = [0u8; 32];
+                key.copy_from_slice(&k);
+                key
+            });
+        let cipher = session_key.map(|k| stream_crypto::StreamCipher::new(&k));
 
         thread::spawn(move || {
             // The host may be an IPv4 literal, a bare IPv6 literal or an already
@@ -541,6 +581,26 @@ impl ViewerApp {
 
                 let _ = stream.set_nodelay(true);
                 let _ = stream.set_read_timeout(Some(Duration::from_millis(2000)));
+
+                // Authentification obligatoire : sans clé, on ne demande rien.
+                let Some(key) = session_key else {
+                    state_stream.lock().status = "clé de session manquante".to_string();
+                    thread::sleep(Duration::from_millis(1000));
+                    continue;
+                };
+                let token = stream_crypto::to_hex(&stream_crypto::auth_token(&key));
+                if stream
+                    .write_all(format!("AUTH {}\n", token).as_bytes())
+                    .is_err()
+                {
+                    continue;
+                }
+                let verdict = read_status_line(&mut stream);
+                if verdict != "OK" {
+                    state_stream.lock().status = "authentification refusée".to_string();
+                    thread::sleep(Duration::from_millis(1000));
+                    continue;
+                }
                 {
                     let mut st = state_stream.lock();
                     st.connected = true;
@@ -581,10 +641,16 @@ impl ViewerApp {
                         break;
                     }
 
-                    let mut payload = vec![0u8; len];
-                    if stream.read_exact(&mut payload).is_err() {
+                    let mut sealed = vec![0u8; len];
+                    if stream.read_exact(&mut sealed).is_err() {
                         break;
                     }
+
+                    // Tout flux non chiffré est refusé : on ne décode jamais du clair.
+                    let payload = match cipher.as_ref().and_then(|c| c.open(&sealed)) {
+                        Some(clear) => clear,
+                        None => break,
+                    };
 
                     if kind == FRAME_KIND_VIDEO {
                         if let Ok(img) = image::load_from_memory(&payload) {
