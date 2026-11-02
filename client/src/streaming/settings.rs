@@ -107,6 +107,9 @@ pub struct StreamSettings {
     pub audio_enabled: bool,
     #[serde(default = "default_audio_volume")]
     pub audio_volume: u8,
+    /// Output device to capture (empty = system default).
+    #[serde(default)]
+    pub audio_device: String,
     /// When false the service refuses to stream the desktop and waits for a real window.
     #[serde(default)]
     pub allow_desktop_fallback: bool,
@@ -136,6 +139,7 @@ impl Default for StreamSettings {
             quality_max: 90,
             audio_enabled: true,
             audio_volume: 100,
+            audio_device: String::new(),
             allow_desktop_fallback: false,
             keep_target_focused: true,
             encoder: String::new(),
@@ -209,6 +213,13 @@ pub struct StreamStats {
     pub quality: u8,
     pub dropped_frames: u64,
     pub clients: u32,
+    /// True when the loopback stream is actually running.
+    #[serde(default)]
+    pub audio_active: bool,
+    #[serde(default)]
+    pub audio_device: String,
+    #[serde(default)]
+    pub audio_error: String,
     pub message: String,
     pub updated_ms: u64,
 }

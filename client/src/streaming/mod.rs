@@ -28,7 +28,7 @@ impl CoopInputMode {
         match self {
             CoopInputMode::MultiGamepad => "Manettes (1 à 4 joueurs)",
             CoopInputMode::TwoKeyboards => "2 claviers (écran partagé)",
-            CoopInputMode::SharedKeyboardMouse => "Clavier/souris partagé (tour par tour)",
+            CoopInputMode::SharedKeyboardMouse => "Même clavier (écran partagé / tour par tour)",
         }
     }
 
@@ -43,6 +43,17 @@ impl CoopInputMode {
     /// In two-keyboard mode the guest has no separate cursor, so its mouse is off.
     pub fn guest_mouse_enabled(&self) -> bool {
         !matches!(self, CoopInputMode::TwoKeyboards)
+    }
+
+    /// Controller forwarding is only meaningful when players use pads.
+    pub fn guest_gamepad_enabled(&self) -> bool {
+        matches!(self, CoopInputMode::MultiGamepad)
+    }
+
+    /// Split-screen games usually read one key set for every local player, so the
+    /// guest keeps the same keys unless the user explicitly asks for a second set.
+    pub fn guest_keeps_same_keys(&self) -> bool {
+        matches!(self, CoopInputMode::SharedKeyboardMouse)
     }
 }
 

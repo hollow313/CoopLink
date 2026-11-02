@@ -37,6 +37,8 @@ pub struct CoopStreamViewer {
     /// 1 = host key set, 2 = guest key set (arrows + numpad) for two-keyboard play.
     pub player_index: u8,
     pub guest_mouse_enabled: bool,
+    /// Forward the guest's own controller as a virtual pad on the host.
+    pub guest_gamepad: bool,
     pub multi_controller_support: bool,
     pub assigned_player_slot: u8,
 }
@@ -55,6 +57,7 @@ impl CoopStreamViewer {
             send_input: true,
             player_index: 1,
             guest_mouse_enabled: true,
+            guest_gamepad: true,
             multi_controller_support: true,
             assigned_player_slot: 2,
         }
@@ -135,6 +138,9 @@ impl CoopStreamViewer {
         }
         if !self.guest_mouse_enabled {
             args.push("--no-mouse");
+        }
+        if !self.guest_gamepad {
+            args.push("--no-gamepad");
         }
 
         for candidate in &exe_candidates {

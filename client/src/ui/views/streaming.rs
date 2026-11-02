@@ -666,8 +666,15 @@ impl StreamingView {
                 // Compteurs réels publiés par le service de capture (aucune valeur simulée).
                 if let Some(stats) = StreamStats::read() {
                     if stats.is_fresh() {
+                        let audio = if stats.audio_active {
+                            format!("son actif ({})", stats.audio_device)
+                        } else if !stats.audio_error.is_empty() {
+                            format!("son muet — {}", stats.audio_error)
+                        } else {
+                            "son muet".to_string()
+                        };
                         let line = format!(
-                            "Diffusion : {}x{} @ {:.0} img/s · {:.1} Mbps · qualité JPEG {} · {} client(s) · {} image(s) ignorée(s) · {}",
+                            "Diffusion : {}x{} @ {:.0} img/s · {:.1} Mbps · qualité JPEG {} · {} client(s) · {} image(s) ignorée(s) · {} · {}",
                             stats.width,
                             stats.height,
                             stats.measured_fps,
@@ -675,7 +682,8 @@ impl StreamingView {
                             stats.quality,
                             stats.clients,
                             stats.dropped_frames,
-                            if stats.message.is_empty() { "actif" } else { &stats.message }
+                            if stats.message.is_empty() { "actif" } else { &stats.message },
+                            audio
                         );
                         ui.label(
                             RichText::new(line)
@@ -1260,6 +1268,26 @@ impl StreamingView {
                         .clicked()
                     {
                         engine.stream_viewer.display_mode = StreamDisplayMode::EmbeddedWindowed;
+                    }
+
+                    ui.add_space(12.0);
+                    ui.label(RichText::new("Taille de la fenêtre :").strong());
+                    for (w, h, label) in [
+                        (1280u32, 720u32, "1280x720"),
+                        (1600, 900, "1600x900"),
+                        (1920, 1080, "1920x1080"),
+                    ] {
+                        if ui
+                            .selectable_label(
+                                engine.stream_viewer.resolution_width == w
+                                    && engine.stream_viewer.resolution_height == h,
+                                label,
+                            )
+                            .clicked()
+                        {
+                            engine.stream_viewer.resolution_width = w;
+                            engine.stream_viewer.resolution_height = h;
+                        }
                     }
 
                     ui.add_space(12.0);

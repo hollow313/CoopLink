@@ -49,6 +49,8 @@ struct ViewerArgs {
     player: u8,
     /// Two-keyboard mode disables the guest mouse so it cannot steal the host cursor.
     mouse: bool,
+    /// Forward the guest's XInput pad to the host's virtual controller.
+    gamepad: bool,
 }
 
 impl Default for ViewerArgs {
@@ -66,6 +68,7 @@ impl Default for ViewerArgs {
             send_input: true,
             player: 1,
             mouse: true,
+            gamepad: true,
         }
     }
 }
@@ -126,6 +129,7 @@ fn parse_args() -> ViewerArgs {
             "--mute" => args.audio = false,
             "--view-only" => args.send_input = false,
             "--no-mouse" => args.mouse = false,
+            "--no-gamepad" => args.gamepad = false,
             "--player" => {
                 if let Some(v) = next(&mut i) {
                     args.player = v.parse().unwrap_or(1);
@@ -379,6 +383,48 @@ fn translate_player2(vk: u16) -> u16 {
     }
 }
 
+/// Reads the guest's XInput pad and streams its state to the host, which feeds it
+/// into a virtual Xbox 360 controller (ViGEmBus).
+#[cfg(windows)]
+fn start_gamepad_forwarding(tcp_tx: Arc<Mutex<Option<TcpStream>>>, running: Arc<AtomicBool>) {
+    use windows_sys::Win32::UI::Input::XboxController::{XInputGetState, XINPUT_STATE};
+
+    thread::spawn(move || {
+        let mut state: XINPUT_STATE = unsafe { std::mem::zeroed() };
+        let mut was_connected = false;
+        while running.load(Ordering::Relaxed) {
+            let rc = unsafe { XInputGetState(0, &mut state) };
+            if rc == 0 {
+                was_connected = true;
+                let g = &state.Gamepad;
+                let line = format!(
+                    "G {:04X} {} {} {} {} {} {}\n",
+                    g.wButtons,
+                    g.bLeftTrigger,
+                    g.bRightTrigger,
+                    g.sThumbLX,
+                    g.sThumbLY,
+                    g.sThumbRX,
+                    g.sThumbRY
+                );
+                if let Some(sock) = tcp_tx.lock().as_mut() {
+                    let _ = sock.write_all(line.as_bytes());
+                }
+            } else if was_connected {
+                // Pad unplugged: release everything on the host side.
+                was_connected = false;
+                if let Some(sock) = tcp_tx.lock().as_mut() {
+                    let _ = sock.write_all(b"G 0000 0 0 0 0 0 0\n");
+                }
+            }
+            thread::sleep(Duration::from_millis(16));
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn start_gamepad_forwarding(_tx: Arc<Mutex<Option<TcpStream>>>, _running: Arc<AtomicBool>) {}
+
 impl ViewerApp {
     fn new(args: ViewerArgs) -> Self {
         let state = Arc::new(Mutex::new(ViewerState {
@@ -396,6 +442,9 @@ impl ViewerApp {
 
         if args.audio {
             start_audio_playback(sink.clone(), running.clone());
+        }
+        if args.gamepad {
+            start_gamepad_forwarding(tcp_tx.clone(), running.clone());
         }
 
         let state_stream = state.clone();

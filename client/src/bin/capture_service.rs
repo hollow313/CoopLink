@@ -117,6 +117,9 @@ struct LiveStats {
     width: AtomicU32,
     height: AtomicU32,
     clients: AtomicU32,
+    audio_ok: AtomicBool,
+    audio_error: Mutex<String>,
+    audio_device_name: Mutex<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -665,6 +668,134 @@ mod engine {
 }
 
 // ---------------------------------------------------------------------------
+// Virtual gamepad (guest controller -> host)
+// ---------------------------------------------------------------------------
+
+/// Guest pad state, exactly what the viewer reads from XInput.
+#[derive(Debug, Clone, Copy, Default)]
+struct PadState {
+    buttons: u16,
+    left_trigger: u8,
+    right_trigger: u8,
+    thumb_lx: i16,
+    thumb_ly: i16,
+    thumb_rx: i16,
+    thumb_ry: i16,
+}
+
+impl PadState {
+    fn is_neutral(&self) -> bool {
+        self.buttons == 0
+            && self.left_trigger == 0
+            && self.right_trigger == 0
+            && self.thumb_lx.abs() < 1500
+            && self.thumb_ly.abs() < 1500
+            && self.thumb_rx.abs() < 1500
+            && self.thumb_ry.abs() < 1500
+    }
+
+    /// `G <hex buttons> <lt> <rt> <lx> <ly> <rx> <ry>`
+    fn parse(payload: &str) -> Option<Self> {
+        let parts: Vec<&str> = payload.split_whitespace().collect();
+        if parts.len() < 7 {
+            return None;
+        }
+        Some(Self {
+            buttons: u16::from_str_radix(parts[0].trim_start_matches("0x"), 16).ok()?,
+            left_trigger: parts[1].parse().ok()?,
+            right_trigger: parts[2].parse().ok()?,
+            thumb_lx: parts[3].parse().ok()?,
+            thumb_ly: parts[4].parse().ok()?,
+            thumb_rx: parts[5].parse().ok()?,
+            thumb_ry: parts[6].parse().ok()?,
+        })
+    }
+}
+
+/// Virtual Xbox 360 pad backed by ViGEmBus. Guest controllers are forwarded into it.
+struct VirtualPad {
+    #[cfg(windows)]
+    inner: Option<vigem_client::Xbox360Wired<vigem_client::Client>>,
+    last: PadState,
+}
+
+impl VirtualPad {
+    fn open() -> Self {
+        #[cfg(windows)]
+        {
+            match vigem_client::Client::connect() {
+                Ok(client) => {
+                    let mut target = vigem_client::Xbox360Wired::new(
+                        client,
+                        vigem_client::TargetId::XBOX360_WIRED,
+                    );
+                    match target.plugin() {
+                        Ok(()) => {
+                            info!("Manette virtuelle Xbox 360 branchée (ViGEmBus).");
+                            return Self {
+                                inner: Some(target),
+                                last: PadState::default(),
+                            };
+                        }
+                        Err(e) => warn!("ViGEmBus : branchement de la manette virtuelle impossible ({:?}).", e),
+                    }
+                }
+                Err(e) => warn!(
+                    "ViGEmBus introuvable ({:?}) : les manettes des invités ne seront pas transmises. Installez le pilote ViGEmBus.",
+                    e
+                ),
+            }
+        }
+        Self {
+            inner: None,
+            last: PadState::default(),
+        }
+    }
+
+    fn is_ready(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.inner.is_some()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+
+    fn update(&mut self, state: PadState) {
+        #[cfg(windows)]
+        if let Some(target) = self.inner.as_mut() {
+            let report = vigem_client::XGamepad {
+                buttons: vigem_client::XButtons(state.buttons),
+                left_trigger: state.left_trigger,
+                right_trigger: state.right_trigger,
+                thumb_lx: state.thumb_lx,
+                thumb_ly: state.thumb_ly,
+                thumb_rx: state.thumb_rx,
+                thumb_ry: state.thumb_ry,
+            };
+            if let Err(e) = target.update(&report) {
+                warn!("Manette virtuelle : mise à jour refusée ({:?}).", e);
+            }
+        }
+        self.last = state;
+    }
+
+    fn neutralize(&mut self) {
+        if !self.last.is_neutral() {
+            self.update(PadState::default());
+        }
+    }
+}
+
+impl Drop for VirtualPad {
+    fn drop(&mut self) {
+        self.neutralize();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Encoding
 // ---------------------------------------------------------------------------
 
@@ -695,23 +826,36 @@ fn write_header(buf: &mut [u8; FRAME_HEADER_LEN], kind: u8, a: u16, b: u16, len:
 // Audio loopback
 // ---------------------------------------------------------------------------
 
-fn start_audio_capture(bus: Arc<AudioBus>, volume: u8, running: Arc<AtomicBool>) {
+fn start_audio_capture(
+    bus: Arc<AudioBus>,
+    volume: u8,
+    wanted_device: String,
+    stats: Arc<LiveStats>,
+    running: Arc<AtomicBool>,
+) {
     thread::spawn(move || {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
         let host = cpal::default_host();
+        // The selected game plays on the system default output; capture that one.
+        let _ = &wanted_device;
         let device = match host.default_output_device() {
             Some(d) => d,
             None => {
-                warn!("Aucune sortie audio par défaut : diffusion vidéo sans son.");
+                let msg = "Aucune sortie audio disponible".to_string();
+                warn!("{} : diffusion vidéo sans son.", msg);
+                *stats.audio_error.lock() = msg;
                 return;
             }
         };
+        let device_name = format!("{:?}", device.description());
 
         let configs: Vec<_> = match device.supported_input_configs() {
             Ok(c) => c.collect(),
             Err(e) => {
-                warn!("Configurations audio indisponibles : {}", e);
+                let msg = format!("Loopback indisponible sur '{}' : {}", device_name, e);
+                warn!("{}", msg);
+                *stats.audio_error.lock() = msg;
                 return;
             }
         };
@@ -733,7 +877,9 @@ fn start_audio_capture(bus: Arc<AudioBus>, volume: u8, running: Arc<AtomicBool>)
         let stream_config = match chosen {
             Some(c) => c,
             None => {
-                warn!("Aucune configuration audio exploitable.");
+                let msg = "Aucune configuration audio exploitable".to_string();
+                warn!("{}.", msg);
+                *stats.audio_error.lock() = msg;
                 return;
             }
         };
@@ -768,13 +914,27 @@ fn start_audio_capture(bus: Arc<AudioBus>, volume: u8, running: Arc<AtomicBool>)
         );
 
         match stream {
-            Ok(st) => {
-                let _ = st.play();
-                while running.load(Ordering::Relaxed) {
-                    thread::sleep(Duration::from_millis(100));
+            Ok(st) => match st.play() {
+                Ok(()) => {
+                    stats.audio_ok.store(true, Ordering::Relaxed);
+                    *stats.audio_error.lock() = String::new();
+                    *stats.audio_device_name.lock() = device_name.clone();
+                    info!("Son du jeu capturé sur '{}' ({} Hz)", device_name, sample_rate);
+                    while running.load(Ordering::Relaxed) {
+                        thread::sleep(Duration::from_millis(100));
+                    }
                 }
+                Err(e) => {
+                    let msg = format!("Lecture loopback impossible sur '{}' : {}", device_name, e);
+                    warn!("{}", msg);
+                    *stats.audio_error.lock() = msg;
+                }
+            },
+            Err(e) => {
+                let msg = format!("Capture audio impossible sur '{}' : {}", device_name, e);
+                warn!("{}", msg);
+                *stats.audio_error.lock() = msg;
             }
-            Err(e) => warn!("Impossible de démarrer la capture audio : {}", e),
         }
     });
 }
@@ -874,6 +1034,7 @@ fn handle_client(
     let _ = stream.set_write_timeout(Some(Duration::from_millis(80)));
 
     stats.clients.fetch_add(1, Ordering::Relaxed);
+    let mut pad = VirtualPad::open();
     // Bitrate the client asked for (it can lower it without renegotiating).
     let requested_kbps = Arc::new(AtomicU32::new(0));
 
@@ -918,6 +1079,11 @@ fn handle_client(
                         } else if line == "F" {
                             let guard = input_target.lock();
                             engine::ensure_foreground(&guard);
+                        } else if let Some(rest) = line.strip_prefix("G ") {
+                            if let Some(state) = PadState::parse(rest) {
+                                // The pad lives in this thread, no lock needed.
+                                pad.update(state);
+                            }
                         } else if let Some(rest) = line.strip_prefix("B ") {
                             if let Ok(kbps) = rest.trim().parse::<u32>() {
                                 input_bitrate.store(kbps.clamp(2_000, 120_000), Ordering::Relaxed);
@@ -1111,7 +1277,15 @@ fn main() {
     let settings = Arc::new(settings);
 
     if settings.audio_enabled {
-        start_audio_capture(audio.clone(), settings.audio_volume, running.clone());
+        {
+            start_audio_capture(
+                audio.clone(),
+                settings.audio_volume,
+                settings.audio_device.clone(),
+                stats.clone(),
+                running.clone(),
+            );
+        }
     }
 
     // ---- capture thread --------------------------------------------------
@@ -1269,6 +1443,9 @@ fn main() {
                     quality: stats.quality.load(Ordering::Relaxed),
                     dropped_frames: stats.dropped.load(Ordering::Relaxed),
                     clients: stats.clients.load(Ordering::Relaxed),
+                    audio_active: stats.audio_ok.load(Ordering::Relaxed),
+                    audio_device: stats.audio_device_name.lock().clone(),
+                    audio_error: stats.audio_error.lock().clone(),
                     message,
                     updated_ms: 0,
                 }

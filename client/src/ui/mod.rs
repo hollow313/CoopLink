@@ -1131,6 +1131,8 @@ impl eframe::App for CoopLinkApp {
                     self.streaming_engine.stream_viewer.player_index = mode.guest_player_index();
                     self.streaming_engine.stream_viewer.guest_mouse_enabled =
                         mode.guest_mouse_enabled();
+                    self.streaming_engine.stream_viewer.guest_gamepad =
+                        mode.guest_gamepad_enabled();
                     let _ = self
                         .streaming_engine
                         .stream_viewer
