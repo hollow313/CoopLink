@@ -1,6 +1,7 @@
 use crate::i18n::Language;
 use crate::streaming::capture_host::{AudioCaptureMode, HardwareEncoder, VirtualGamepadType};
-use crate::streaming::stream_viewer::{StreamDisplayMode, VideoCodec};
+use crate::streaming::settings::StreamStats;
+use crate::streaming::stream_viewer::StreamDisplayMode;
 use crate::streaming::{CoopInputMode, StreamingEngine, StreamingRoleTab};
 use crate::types::AppState;
 use crate::ui::retro_theme::ModernTheme;
@@ -652,6 +653,31 @@ impl StreamingView {
                     });
                 });
 
+                ui.add_space(8.0);
+
+                // Compteurs réels publiés par le service de capture (aucune valeur simulée).
+                if let Some(stats) = StreamStats::read() {
+                    if stats.is_fresh() {
+                        let line = format!(
+                            "Diffusion : {}x{} @ {:.0} img/s · {:.1} Mbps · qualité JPEG {} · {} client(s) · {} image(s) ignorée(s) · {}",
+                            stats.width,
+                            stats.height,
+                            stats.measured_fps,
+                            stats.measured_kbps as f32 / 1000.0,
+                            stats.quality,
+                            stats.clients,
+                            stats.dropped_frames,
+                            if stats.message.is_empty() { "actif" } else { &stats.message }
+                        );
+                        ui.label(
+                            RichText::new(line)
+                                .color(ModernTheme::GREEN_VIVID)
+                                .size(12.0)
+                                .monospace(),
+                        );
+                    }
+                }
+
                 ui.add_space(12.0);
                 ui.separator();
                 ui.add_space(8.0);
@@ -800,14 +826,14 @@ impl StreamingView {
                             }
                             let is_1440 = !engine.capture_host.auto_optimized_mode
                                 && engine.capture_host.target_height == 1440
-                                && engine.capture_host.target_fps == 120;
+                                && engine.capture_host.target_fps == 60;
                             if ui
                                 .selectable_label(
                                     is_1440,
                                     match lang {
-                                        Language::Fr => "1440p @ 120 FPS (Ultra Fluide)",
-                                        Language::En => "1440p @ 120 FPS (Ultra Smooth)",
-                                        _ => "1440p @ 120 FPS",
+                                        Language::Fr => "1440p @ 60 FPS (Écran 2K)",
+                                        Language::En => "1440p @ 60 FPS (2K display)",
+                                        _ => "1440p @ 60 FPS",
                                     },
                                 )
                                 .clicked()
@@ -815,7 +841,7 @@ impl StreamingView {
                                 engine.capture_host.auto_optimized_mode = false;
                                 engine.capture_host.target_width = 2560;
                                 engine.capture_host.target_height = 1440;
-                                engine.capture_host.target_fps = 120;
+                                engine.capture_host.target_fps = 60;
                             }
                         });
 
@@ -850,7 +876,29 @@ impl StreamingView {
 
                         ui.add_space(6.0);
 
-                        // Ligne 3 : Options Audio Avancées (Isolation stricte du jeu + Volume + Anti-Écho)
+                        // Ligne 3 : Débit cible réellement appliqué par le service de capture.
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("Débit cible :").strong());
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut engine.capture_host.dynamic_bitrate_kbps,
+                                    5_000..=60_000,
+                                )
+                                .suffix(" kbps"),
+                            );
+                            ui.label(
+                                RichText::new(format!(
+                                    "{:.1} Mbps",
+                                    engine.capture_host.dynamic_bitrate_kbps as f32 / 1000.0
+                                ))
+                                .color(ModernTheme::GREEN_VIVID)
+                                .monospace(),
+                            );
+                        });
+
+                        ui.add_space(6.0);
+
+                        // Ligne 4 : Options Audio Avancées (Isolation stricte du jeu + Volume + Anti-Écho)
                         ui.horizontal_wrapped(|ui| {
                             ui.label(
                                 RichText::new(match lang {
@@ -1169,13 +1217,20 @@ impl StreamingView {
                     }
 
                     ui.add_space(12.0);
-                    ui.label(RichText::new("Décodage matériel :").strong());
-                    for codec in [VideoCodec::Hevc, VideoCodec::Av1, VideoCodec::H264] {
+                    ui.label(RichText::new("Profil de débit :").strong());
+                    for (kbps, label) in [
+                        (20_000u32, "20 Mbps (connexion moyenne)"),
+                        (35_000, "35 Mbps (équilibré)"),
+                        (50_000, "50 Mbps (netteté maximale)"),
+                    ] {
                         if ui
-                            .selectable_label(engine.stream_viewer.preferred_codec == codec, codec.label())
+                            .selectable_label(
+                                engine.stream_viewer.bitrate_kbps == kbps,
+                                label,
+                            )
                             .clicked()
                         {
-                            engine.stream_viewer.preferred_codec = codec;
+                            engine.stream_viewer.bitrate_kbps = kbps;
                         }
                     }
                 });

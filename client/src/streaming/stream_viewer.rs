@@ -1,33 +1,8 @@
+use crate::streaming::settings::{StreamSettings, DEFAULT_STREAM_PORT};
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use tracing::info;
-
-/// Codec vidéo matériel préféré (Décodage < 5 ms)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum VideoCodec {
-    H264,
-    Hevc, // H.265
-    Av1,  // AV1
-}
-
-impl VideoCodec {
-    pub fn as_cli_arg(&self) -> &'static str {
-        match self {
-            VideoCodec::H264 => "H.264",
-            VideoCodec::Hevc => "HEVC",
-            VideoCodec::Av1 => "AV1",
-        }
-    }
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            VideoCodec::H264 => "H.264 (Compatibilité Universelle)",
-            VideoCodec::Hevc => "HEVC / H.265 (Haute Efficacité < 3ms)",
-            VideoCodec::Av1 => "AV1 (Ultra Basse Latence RTX 40 / RX 7000)",
-        }
-    }
-}
 
 /// Mode d'affichage du flux distant CoopLink
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,28 +15,26 @@ pub enum StreamDisplayMode {
 impl StreamDisplayMode {
     pub fn label(&self) -> &'static str {
         match self {
-            StreamDisplayMode::EmbeddedWindowed => "Fenêtre intégrée",
-            StreamDisplayMode::BorderlessFullscreen => "Plein écran sans bordure",
+            StreamDisplayMode::EmbeddedWindowed => "Fenêtre",
+            StreamDisplayMode::BorderlessFullscreen => "Plein écran",
         }
     }
 }
 
-/// Gestionnaire du lecteur vidéo & manettes distant CoopLink
+/// Gestionnaire du lecteur vidéo & périphériques distants CoopLink
 #[allow(dead_code)]
 pub struct CoopStreamViewer {
     pub is_streaming: bool,
     pub target_host_vip: Ipv4Addr,
-    pub preferred_codec: VideoCodec,
     pub display_mode: StreamDisplayMode,
+    /// What the client asks for; the host decides what it can actually send.
     pub resolution_width: u32,
     pub resolution_height: u32,
     pub fps: u32,
     pub bitrate_kbps: u32,
-    pub hardware_decoding_mandatory: bool,
-    pub capture_gamepads_xinput_sdl: bool,
     pub capture_mouse_keyboard: bool,
+    pub send_input: bool,
     pub multi_controller_support: bool,
-    pub estimated_decode_latency_ms: f32,
     pub assigned_player_slot: u8,
 }
 
@@ -70,17 +43,14 @@ impl CoopStreamViewer {
         Self {
             is_streaming: false,
             target_host_vip: default_host_vip,
-            preferred_codec: VideoCodec::Hevc,
             display_mode: StreamDisplayMode::BorderlessFullscreen,
             resolution_width: 1920,
             resolution_height: 1080,
             fps: 60,
-            bitrate_kbps: 25000,
-            hardware_decoding_mandatory: true,
-            capture_gamepads_xinput_sdl: true,
+            bitrate_kbps: 30_000,
             capture_mouse_keyboard: false,
+            send_input: true,
             multi_controller_support: true,
-            estimated_decode_latency_ms: 1.8,
             assigned_player_slot: 2,
         }
     }
@@ -97,20 +67,19 @@ impl CoopStreamViewer {
             self.target_host_vip = ip;
         }
 
-        let display_flag = match self.display_mode {
-            StreamDisplayMode::EmbeddedWindowed => "--windowed",
-            StreamDisplayMode::BorderlessFullscreen => "--borderless",
-        };
-
-        let res_w = self.resolution_width.to_string();
-        let res_h = self.resolution_height.to_string();
-        let fps_str = self.fps.to_string();
-        let bitrate_str = self.bitrate_kbps.to_string();
-        let codec_str = self.preferred_codec.as_cli_arg();
+        let port = StreamSettings::default_path()
+            .exists()
+            .then(|| StreamSettings::load_or_default(&StreamSettings::default_path()).stream_port)
+            .unwrap_or(DEFAULT_STREAM_PORT);
 
         info!(
-            "Ouverture du flux vidéo P2P CoopLink vers {} (Jeu: '{}', Codec: {}, Décodage Matériel < 5ms)",
-            host_str, app_name, codec_str
+            "Ouverture du flux CoopLink vers {}:{} ({}x{} @ {} FPS, cible {:.1} Mbps)",
+            host_str,
+            port,
+            self.resolution_width,
+            self.resolution_height,
+            self.fps,
+            self.bitrate_kbps as f32 / 1000.0
         );
 
         let mut exe_candidates = vec![
@@ -125,48 +94,46 @@ impl CoopStreamViewer {
             }
         }
 
+        let width = self.resolution_width.to_string();
+        let height = self.resolution_height.to_string();
+        let fps = self.fps.to_string();
+        let bitrate = self.bitrate_kbps.to_string();
+        let port_str = port.to_string();
+        let display_flag = match self.display_mode {
+            StreamDisplayMode::EmbeddedWindowed => "--windowed",
+            StreamDisplayMode::BorderlessFullscreen => "--fullscreen",
+        };
+
+        let mut args: Vec<&str> = vec![
+            "stream",
+            "--host",
+            host_str,
+            "--port",
+            &port_str,
+            "--title",
+            app_name,
+            "--width",
+            &width,
+            "--height",
+            &height,
+            "--fps",
+            &fps,
+            "--bitrate",
+            &bitrate,
+            display_flag,
+        ];
+        if !self.send_input {
+            args.push("--view-only");
+        }
+
         for candidate in &exe_candidates {
             if candidate.exists() {
-                let mut args = vec![
-                    "stream",
-                    &host_str,
-                    app_name,
-                    "--resolution",
-                    &res_w,
-                    &res_h,
-                    "--fps",
-                    &fps_str,
-                    "--bitrate",
-                    &bitrate_str,
-                    "--video-codec",
-                    codec_str,
-                    "--video-decoder",
-                    "hardware",
-                    "--audio-on-host",
-                    "--multi-controller",
-                    display_flag,
-                ];
-
-                if self.capture_mouse_keyboard {
-                    args.push("--capture-system-keys");
-                    args.push("always");
-                } else {
-                    args.push("--no-mouse-capture");
-                }
-
-                let _ = std::process::Command::new(candidate)
-                    .args(&args)
-                    .spawn();
+                let _ = std::process::Command::new(candidate).args(&args).spawn();
                 break;
             }
         }
 
         self.is_streaming = true;
-        self.estimated_decode_latency_ms = match self.preferred_codec {
-            VideoCodec::Av1 => 1.4,
-            VideoCodec::Hevc => 1.8,
-            VideoCodec::H264 => 2.3,
-        };
         Ok(())
     }
 
@@ -177,7 +144,7 @@ impl CoopStreamViewer {
                 &["/F", "/IM", "cooplink-viewer.exe"],
             );
             self.is_streaming = false;
-            info!("Flux d'écran partagé CoopLink fermé.");
+            info!("Flux CoopLink fermé.");
         }
     }
 }
