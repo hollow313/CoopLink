@@ -34,6 +34,9 @@ pub struct CoopStreamViewer {
     pub bitrate_kbps: u32,
     pub capture_mouse_keyboard: bool,
     pub send_input: bool,
+    /// 1 = host key set, 2 = guest key set (arrows + numpad) for two-keyboard play.
+    pub player_index: u8,
+    pub guest_mouse_enabled: bool,
     pub multi_controller_support: bool,
     pub assigned_player_slot: u8,
 }
@@ -50,6 +53,8 @@ impl CoopStreamViewer {
             bitrate_kbps: 30_000,
             capture_mouse_keyboard: false,
             send_input: true,
+            player_index: 1,
+            guest_mouse_enabled: true,
             multi_controller_support: true,
             assigned_player_slot: 2,
         }
@@ -99,6 +104,7 @@ impl CoopStreamViewer {
         let fps = self.fps.to_string();
         let bitrate = self.bitrate_kbps.to_string();
         let port_str = port.to_string();
+        let player_str = self.player_index.to_string();
         let display_flag = match self.display_mode {
             StreamDisplayMode::EmbeddedWindowed => "--windowed",
             StreamDisplayMode::BorderlessFullscreen => "--fullscreen",
@@ -120,10 +126,15 @@ impl CoopStreamViewer {
             &fps,
             "--bitrate",
             &bitrate,
+            "--player",
+            &player_str,
             display_flag,
         ];
         if !self.send_input {
             args.push("--view-only");
+        }
+        if !self.guest_mouse_enabled {
+            args.push("--no-mouse");
         }
 
         for candidate in &exe_candidates {

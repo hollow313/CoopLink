@@ -184,8 +184,14 @@ pub struct CoopCaptureHost {
     pub controller_slots: Vec<ControllerSlotAssignment>,
     pub service_port: u16,
     pub stream_port: u16,
+    /// Process image of the game to capture (`Game.exe`). Empty = follow the foreground window.
+    pub target_process: String,
+    /// Window-title fragment used when `target_process` is empty.
+    pub target_title: String,
     /// Settings actually handed to the capture service.
     pub last_settings_path: Option<PathBuf>,
+    /// Signature of the last written session file, to avoid rewriting it every frame.
+    pub last_settings_signature: String,
 }
 
 #[allow(dead_code)]
@@ -231,7 +237,10 @@ impl CoopCaptureHost {
             }],
             service_port: DEFAULT_CONTROL_PORT,
             stream_port: DEFAULT_STREAM_PORT,
+            target_process: String::new(),
+            target_title: String::new(),
             last_settings_path: None,
+            last_settings_signature: String::new(),
         };
         mgr.detect_hardware_capabilities();
         mgr
@@ -415,7 +424,14 @@ impl CoopCaptureHost {
 
     /// Settings actually sent to the capture service (JSON, one file per session).
     pub fn build_stream_settings(&self, game_selection: &str) -> StreamSettings {
-        let (process, title) = selection_to_target(game_selection);
+        // Explicit picker selection wins; the label is only a fallback.
+        let (process, title) = if self.target_process.trim().is_empty()
+            && self.target_title.trim().is_empty()
+        {
+            selection_to_target(game_selection)
+        } else {
+            (self.target_process.clone(), self.target_title.clone())
+        };
 
         let mut settings = StreamSettings {
             target_process: process,
@@ -445,6 +461,42 @@ impl CoopCaptureHost {
             warn!("Impossible d'écrire les réglages de diffusion : {}", e);
         }
         path
+    }
+
+    /// Rewrites the session file when the user changed resolution, FPS, bitrate or
+    /// target while a session is running. The service reloads it on mtime change.
+    pub fn persist_if_running(&mut self) {
+        if !self.is_running {
+            return;
+        }
+        let settings = self.build_stream_settings("");
+        let signature = format!(
+            "{}|{}|{}x{}@{}|{}|{}|{}|{}",
+            settings.target_process,
+            settings.target_title,
+            settings.width,
+            settings.height,
+            settings.fps,
+            settings.bitrate_kbps,
+            settings.quality_min,
+            settings.quality_max,
+            settings.audio_volume
+        );
+        if signature == self.last_settings_signature {
+            return;
+        }
+        let path = StreamSettings::default_path();
+        if settings.save_to(&path).is_ok() {
+            self.last_settings_signature = signature;
+            self.last_settings_path = Some(path);
+            info!(
+                "Réglages de diffusion mis à jour à chaud : {}x{} @ {} FPS, {:.1} Mbps",
+                settings.width,
+                settings.height,
+                settings.fps,
+                settings.bitrate_kbps as f32 / 1000.0
+            );
+        }
     }
 
     /// Démarre le service de capture du jeu ciblé.

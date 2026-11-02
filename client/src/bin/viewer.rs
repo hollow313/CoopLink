@@ -45,6 +45,10 @@ struct ViewerArgs {
     fullscreen: bool,
     audio: bool,
     send_input: bool,
+    /// 1 = host key set, 2 = guest key set (arrows + numpad).
+    player: u8,
+    /// Two-keyboard mode disables the guest mouse so it cannot steal the host cursor.
+    mouse: bool,
 }
 
 impl Default for ViewerArgs {
@@ -60,6 +64,8 @@ impl Default for ViewerArgs {
             fullscreen: false,
             audio: true,
             send_input: true,
+            player: 1,
+            mouse: true,
         }
     }
 }
@@ -119,6 +125,12 @@ fn parse_args() -> ViewerArgs {
             "--windowed" => args.fullscreen = false,
             "--mute" => args.audio = false,
             "--view-only" => args.send_input = false,
+            "--no-mouse" => args.mouse = false,
+            "--player" => {
+                if let Some(v) = next(&mut i) {
+                    args.player = v.parse().unwrap_or(1);
+                }
+            }
             other if !other.starts_with('-') => positional.push(other.to_string()),
             _ => {}
         }
@@ -278,6 +290,8 @@ struct ViewerApp {
     last_input_time: Instant,
     fullscreen: bool,
     wants_input: bool,
+    player: u8,
+    mouse_enabled: bool,
 }
 
 /// Keyboard map: egui key -> Windows virtual-key code.
@@ -342,6 +356,28 @@ const KEY_MAP: &[(Key, u16)] = &[
     (Key::F7, 0x76),
     (Key::F8, 0x77),
 ];
+
+/// Second keyboard -> dedicated Player 2 key set, so two players can share one game
+/// without a virtual gamepad driver. Arrows to move, numpad for actions.
+fn translate_player2(vk: u16) -> u16 {
+    match vk {
+        0x57 => 0x26, // W -> Up
+        0x53 => 0x28, // S -> Down
+        0x41 => 0x25, // A -> Left
+        0x44 => 0x27, // D -> Right
+        0x20 => 0x60, // Space -> Numpad 0 (action / jump)
+        0x45 => 0x61, // E -> Numpad 1 (interact)
+        0x46 => 0x62, // F -> Numpad 2 (secondary action)
+        0x51 => 0x63, // Q -> Numpad 3
+        0x52 => 0x64, // R -> Numpad 4 (reload)
+        0x43 => 0x65, // C -> Numpad 5 (crouch)
+        0x09 => 0x66, // Tab -> Numpad 6 (scoreboard)
+        0x10 => 0xA1, // Shift -> Right Shift (sprint)
+        0x11 => 0xA3, // Ctrl -> Right Ctrl (crouch)
+        0x12 => 0xA5, // Alt -> Right Alt
+        other => other,
+    }
+}
 
 impl ViewerApp {
     fn new(args: ViewerArgs) -> Self {
@@ -509,6 +545,8 @@ impl ViewerApp {
             last_input_time: Instant::now(),
             fullscreen: args.fullscreen,
             wants_input: args.send_input,
+            player: args.player,
+            mouse_enabled: args.mouse,
         }
     }
 
@@ -556,6 +594,13 @@ impl eframe::App for ViewerApp {
             });
             keys.sort_unstable();
             keys.dedup();
+            if self.player == 2 {
+                for vk in keys.iter_mut() {
+                    *vk = translate_player2(*vk);
+                }
+                keys.sort_unstable();
+                keys.dedup();
+            }
 
             let changed = keys != self.active_keys;
             let heartbeat = self.last_input_time.elapsed() > Duration::from_millis(50);
@@ -580,7 +625,7 @@ impl eframe::App for ViewerApp {
                 }
                 (i.pointer.delta(), mask)
             });
-            if delta.length() > 0.05 || buttons != 0 {
+            if self.mouse_enabled && (delta.length() > 0.05 || buttons != 0) {
                 self.send_input(format!(
                     "M {} {} {}\n",
                     delta.x.round() as i32,

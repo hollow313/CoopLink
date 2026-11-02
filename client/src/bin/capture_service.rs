@@ -1121,20 +1121,55 @@ fn main() {
         let settings = settings.clone();
         let target = target.clone();
         let stats = stats.clone();
+        let settings_path = settings_path.clone();
 
         thread::spawn(move || {
             let mut seq = 0u64;
             let mut last_refresh = Instant::now();
             let mut sticky: Option<engine::WindowRef> = None;
             let mut last_message = String::new();
+            // Hot reload: the UI rewrites the session file when the user changes
+            // resolution, FPS, bitrate or target while the session is running.
+            let mut live = (*settings).clone();
+            let mut last_mtime = std::fs::metadata(&settings_path)
+                .and_then(|m| m.modified())
+                .ok();
+            let mut last_file_check = Instant::now();
 
             while running.load(Ordering::Relaxed) {
                 let started = Instant::now();
 
+                if last_file_check.elapsed() > Duration::from_millis(500) {
+                    last_file_check = Instant::now();
+                    let mtime = std::fs::metadata(&settings_path)
+                        .and_then(|m| m.modified())
+                        .ok();
+                    if mtime.is_some() && mtime != last_mtime {
+                        last_mtime = mtime;
+                        if let Some(mut reloaded) = StreamSettings::load_from(&settings_path) {
+                            reloaded.clamp();
+                            info!(
+                                "Session rechargée : {}x{} @ {} FPS, {:.1} Mbps, cible '{}'",
+                                reloaded.width,
+                                reloaded.height,
+                                reloaded.fps,
+                                reloaded.bitrate_kbps as f32 / 1000.0,
+                                if reloaded.target_process.is_empty() {
+                                    reloaded.target_title.clone()
+                                } else {
+                                    reloaded.target_process.clone()
+                                }
+                            );
+                            live = reloaded;
+                            last_refresh = Instant::now() - Duration::from_secs(2);
+                        }
+                    }
+                }
+
                 let needs_refresh = last_refresh.elapsed() > Duration::from_secs(1)
                     || !engine::window_alive(&target.lock());
                 if needs_refresh {
-                    let resolved = engine::resolve_target(&settings, sticky.as_ref());
+                    let resolved = engine::resolve_target(&live, sticky.as_ref());
                     let message = engine::describe(&resolved).2;
                     if message != last_message {
                         match &resolved {
@@ -1162,10 +1197,10 @@ fn main() {
                     match engine::source_size(&guard) {
                         // Never upscale above the native window size.
                         Some((sw, sh)) => (
-                            (settings.width.min(sw) / 2) * 2,
-                            (settings.height.min(sh) / 2) * 2,
+                            (live.width.min(sw) / 2) * 2,
+                            (live.height.min(sh) / 2) * 2,
                         ),
-                        None => (settings.width, settings.height),
+                        None => (live.width, live.height),
                     }
                 };
 
@@ -1189,7 +1224,7 @@ fn main() {
                 }
 
                 let elapsed = started.elapsed();
-                let budget = settings.frame_interval();
+                let budget = live.frame_interval();
                 if elapsed < budget {
                     thread::sleep(budget - elapsed);
                 }

@@ -20,6 +20,9 @@ impl StreamingView {
         on_start_client_stream: &mut bool,
         on_stop_client_stream: &mut bool,
     ) {
+        // Applique à chaud toute modification de résolution / FPS / débit / jeu ciblé.
+        engine.capture_host.persist_if_running();
+
         // N'importe quel participant au salon peut partager son jeu ou rejoindre celui d'un ami
 
 
@@ -244,7 +247,12 @@ impl StreamingView {
                         .show_ui(ui, |ui| {
                             let windows = engine.detected_windows.clone();
                             for w in windows {
-                                ui.selectable_value(&mut engine.selected_app_name, w.clone(), w);
+                                if ui
+                                    .selectable_label(engine.selected_app_name == w, &w)
+                                    .clicked()
+                                {
+                                    engine.select_window(&w);
+                                }
                             }
                         });
 
@@ -462,8 +470,8 @@ impl StreamingView {
                         Language::Pt => "Modo A — Com Comandos (2 a 4 Comandos independentes)",
                     },
                     match lang {
-                        Language::Fr => "Vous êtes le Joueur 1. Dès que votre ami connecte sa manette, CoopLink crée une 2e manette virtuelle (Joueur 2) sur votre PC. Chacun contrôle son personnage sans aucun conflit.",
-                        Language::En => "You are Player 1. As soon as your friend connects their controller, CoopLink creates a 2nd virtual controller (Player 2) on your PC. Everyone controls their own character with zero conflict.",
+                        Language::Fr => "Vous branchez vos manettes sur le PC hôte : le jeu les voit nativement (Joueur 1, 2, 3…). L'invité joue avec la manette branchée sur son propre PC, transmise en manette Joueur 2.",
+                        Language::En => "Plug your controllers into the host PC: the game sees them natively (Player 1, 2, 3…). The guest plays with the controller plugged into their own PC, forwarded as Player 2.",
                         Language::Es => "Tú eres el Jugador 1. Tu amigo se asigna automáticamente como Mando Jugador 2 (y Jugador 3/4). Cada uno controla su propio personaje sin conflictos.",
                         Language::De => "Du bist Spieler 1. Dein Freund wird automatisch als virtueller Controller Spieler 2 zugewiesen. Jeder steuert seinen eigenen Charakter ohne Konflikte.",
                         Language::Pt => "Você é o Jogador 1. O seu amigo é atribuído automaticamente como Comando Jogador 2. Cada um controla a sua personagem sem conflitos.",
@@ -478,24 +486,24 @@ impl StreamingView {
 
                 Self::render_input_mode_card(
                     ui,
-                    engine.coop_input_mode == CoopInputMode::KeyboardToVirtualGamepad,
+                    engine.coop_input_mode == CoopInputMode::TwoKeyboards,
                     ModernTheme::BLUE_ELECTRIC,
                     match lang {
-                        Language::Fr => "Mode B — Vous êtes tous les 2 au Clavier / Souris (Conversion Manette J2)",
-                        Language::En => "Mode B — Both of you use Keyboard & Mouse (Smart Player 2 Emulation)",
-                        Language::Es => "Modo B — Ambos usan Teclado y Ratón (Conversión a Mando Jugador 2)",
-                        Language::De => "Modus B — Beide nutzen Tastatur & Maus (Emulation als Controller 2)",
-                        Language::Pt => "Modo B — Ambos usam Teclado e Rato (Conversão para Comando Jogador 2)",
+                        Language::Fr => "Mode B — Deux claviers (écran partagé, sans pilote virtuel)",
+                        Language::En => "Mode B — Two keyboards (split-screen, no virtual driver)",
+                        Language::Es => "Modo B — Dos teclados (pantalla dividida)",
+                        Language::De => "Modus B — Zwei Tastaturen (Splitscreen)",
+                        Language::Pt => "Modo B — Dois teclados (ecrã dividido)",
                     },
                     match lang {
-                        Language::Fr => "Windows ne possède qu'un seul curseur de souris physique. Pour que votre ami ne bouge pas votre souris pendant que vous jouez : vous jouez au Clavier/Souris (Joueur 1) et le Clavier/Souris de votre ami (ZQSD, Espace, Souris) est converti en Manette Joueur 2 !",
-                        Language::En => "Windows only has one physical mouse cursor. So your friend doesn't hijack your cursor: you play with Keyboard/Mouse (Player 1) while your friend's Keyboard/Mouse (WASD, Space, Mouse) is automatically converted into Player 2's Controller!",
+                        Language::Fr => "Vous jouez en ZQSD + souris (Joueur 1). Le clavier de votre ami est traduit automatiquement vers un jeu de touches dédié (flèches pour se déplacer, pavé numérique pour les actions, Maj droite pour courir, Ctrl droit pour s'accroupir) : aucun conflit, et aucun pilote à installer. Sa souris est désactivée pour ne pas voler votre curseur.",
+                        Language::En => "You play WASD + mouse (Player 1). Your friend's keyboard is translated to a separate key set (arrows to move, numpad for actions, Right Shift to sprint, Right Ctrl to crouch): no conflict, no driver to install. Their mouse is disabled so it cannot steal your cursor.",
                         Language::Es => "Windows solo tiene un cursor de ratón. Tú juegas con tu Teclado/Ratón (Jugador 1) y el Teclado/Ratón de tu amigo se convierte automáticamente en el Mando del Jugador 2.",
                         Language::De => "Windows hat nur einen Mauszeiger. Du spielst mit Tastatur/Maus (Spieler 1) und die Tastatur/Maus deines Freundes wird automatisch in den Controller für Spieler 2 umgewandelt.",
                         Language::Pt => "O Windows só tem um cursor de rato. Você joga com Teclado/Rato (Jogador 1) e o Teclado/Rato do seu amigo é convertido automaticamente no Comando do Jogador 2.",
                     },
                     || {
-                        engine.coop_input_mode = CoopInputMode::KeyboardToVirtualGamepad;
+                        engine.coop_input_mode = CoopInputMode::TwoKeyboards;
                         engine.stream_viewer.capture_mouse_keyboard = false;
                     },
                 );
@@ -514,7 +522,7 @@ impl StreamingView {
                         Language::Pt => "Modo C — Teclado e Rato Partilhados (Mesmo teclado ou por turnos)",
                     },
                     match lang {
-                        Language::Fr => "Votre ami peut aussi déplacer le curseur et appuyer sur les touches de votre clavier (idéal pour les jeux au tour par tour, les jeux de stratégie, ou si Joueur 1 joue avec ZQSD et Joueur 2 avec les Flèches).",
+                        Language::Fr => "Votre ami agit directement sur votre clavier et votre souris, sans traduction de touches (jeux au tour par tour, stratégie, ou jeux où J1 et J2 se relaient).",
                         Language::En => "Your friend can also move the mouse cursor and press keyboard keys directly (ideal for turn-based games, strategy games, or when Player 1 uses WASD and Player 2 uses Arrow keys).",
                         Language::Es => "Tu amigo también puede mover el ratón y pulsar teclas directamente (ideal para juegos por turnos o cuando J1 usa WASD y J2 las Flechas).",
                         Language::De => "Dein Freund kann auch den Mauszeiger bewegen und Tasten drücken (ideal für rundenbasierte Spiele oder wenn S1 WASD und S2 Pfeiltasten nutzt).",
@@ -843,6 +851,44 @@ impl StreamingView {
                                 engine.capture_host.target_height = 1440;
                                 engine.capture_host.target_fps = 60;
                             }
+                            let is_720 = !engine.capture_host.auto_optimized_mode
+                                && engine.capture_host.target_height == 720;
+                            if ui
+                                .selectable_label(
+                                    is_720,
+                                    match lang {
+                                        Language::Fr => "720p (petit débit)",
+                                        Language::En => "720p (low bitrate)",
+                                        _ => "720p",
+                                    },
+                                )
+                                .clicked()
+                            {
+                                engine.capture_host.auto_optimized_mode = false;
+                                engine.capture_host.target_width = 1280;
+                                engine.capture_host.target_height = 720;
+                                engine.capture_host.target_fps = 60;
+                            }
+                            // 3840x2160 acts as "native": the service clamps to the
+                            // window size, so the picture is never upscaled.
+                            let is_native = !engine.capture_host.auto_optimized_mode
+                                && engine.capture_host.target_width >= 3840;
+                            if ui
+                                .selectable_label(
+                                    is_native,
+                                    match lang {
+                                        Language::Fr => "Natif (taille de la fenêtre)",
+                                        Language::En => "Native (window size)",
+                                        _ => "Native",
+                                    },
+                                )
+                                .clicked()
+                            {
+                                engine.capture_host.auto_optimized_mode = false;
+                                engine.capture_host.target_width = 3840;
+                                engine.capture_host.target_height = 2160;
+                                engine.capture_host.target_fps = 60;
+                            }
                         });
 
                         ui.add_space(6.0);
@@ -1040,7 +1086,7 @@ impl StreamingView {
 
                 Self::render_input_mode_card(
                     ui,
-                    engine.coop_input_mode == CoopInputMode::KeyboardToVirtualGamepad,
+                    engine.coop_input_mode == CoopInputMode::TwoKeyboards,
                     ModernTheme::BLUE_ELECTRIC,
                     match lang {
                         Language::Fr => "Je n'ai pas de manette : Convertir mon Clavier/Souris en Manette Joueur 2",
@@ -1057,7 +1103,7 @@ impl StreamingView {
                         Language::Pt => "Teclas: WASD/Setas = Analógico Esq | Rato = Analógico Dir | Espaço/Clique Esq = Botão A | Shift = Botão B.",
                     },
                     || {
-                        engine.coop_input_mode = CoopInputMode::KeyboardToVirtualGamepad;
+                        engine.coop_input_mode = CoopInputMode::TwoKeyboards;
                         engine.stream_viewer.capture_mouse_keyboard = false;
                     },
                 );
