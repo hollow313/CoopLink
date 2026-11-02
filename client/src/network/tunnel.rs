@@ -534,12 +534,24 @@ impl NetworkTunnel {
         let auth_tag = compute_handshake_auth_tag(&room_code, &room_password, &player_name);
         let auth_hex = hex_encode(&auth_tag);
 
-        let socket = match UdpSocket::bind("[::]:0").await {
-            Ok(s) => s,
-            Err(_) => UdpSocket::bind("0.0.0.0:0").await?,
+        let (socket, dual_stack) = match UdpSocket::bind("[::]:0").await {
+            Ok(s) => (s, true),
+            Err(_) => (UdpSocket::bind("0.0.0.0:0").await?, false),
         };
         let socket = Arc::new(socket);
         info!("CoopLink Client AEAD initialisé sur {}", socket.local_addr()?);
+
+        // Une socket double pile n'accepte pas une cible IPv4 nue : il faut l'adresse
+        // mappée (::ffff:a.b.c.d), sinon send_to échoue en EAFNOSUPPORT et le handshake
+        // n'est jamais émis. La réponse de l'hôte arrive sous la même forme mappée,
+        // donc la comparaison src_endpoint == server_addr reste valide.
+        let mut server_addr = server_addr;
+        if dual_stack {
+            if let SocketAddr::V4(v4) = server_addr {
+                server_addr =
+                    SocketAddr::new(IpAddr::V6(v4.ip().to_ipv6_mapped()), v4.port());
+            }
+        }
 
         // Envoi du Handshake Request chiffré AEAD
         let req = CoopPacket::HandshakeRequest {
