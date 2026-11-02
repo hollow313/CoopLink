@@ -29,6 +29,8 @@ WizardStyle=modern
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
+MinVersion=10.0.17763
 
 [Languages]
 Name: "french"; MessagesFile: "compiler:Languages\French.isl"
@@ -51,7 +53,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\redist\ViGEmBus_1.22.0_x64_x86_arm64.exe"; Parameters: "/quiet /norestart"; StatusMsg: "Installation du pilote de manette virtuelle ViGEmBus..."; Flags: runhidden waituntilterminated; Check: (not ViGEmBusInstalled) and WizardIsTaskSelected('vigembus')
-Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -WindowStyle Hidden -Command ""New-NetFirewallRule -DisplayName 'CoopLink - Core Virtual LAN' -Direction Inbound -Program '{app}\{#MyAppExeName}' -Action Allow -Profile Any -ErrorAction SilentlyContinue; New-NetFirewallRule -DisplayName 'CoopLink - UDP Gaming Discovery' -Direction Inbound -Protocol UDP -LocalPort 42422 -Action Allow -Profile Any -ErrorAction SilentlyContinue"""; Flags: runhidden; Tasks: firewall
+Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -WindowStyle Hidden -Command ""New-NetFirewallRule -DisplayName 'CoopLink - Core Virtual LAN' -Direction Inbound -Program '{app}\{#MyAppExeName}' -Action Allow -Profile Any -ErrorAction SilentlyContinue; New-NetFirewallRule -DisplayName 'CoopLink - UDP Gaming Discovery' -Direction Inbound -Protocol UDP -LocalPort 42422 -Action Allow -Profile Any -ErrorAction SilentlyContinue; New-NetFirewallRule -DisplayName 'CoopLink - Stream TCP' -Direction Inbound -Protocol TCP -LocalPort 47500 -Action Allow -Profile Any -ErrorAction SilentlyContinue; if (Test-Path '{app}\cooplink-capture-service.exe') {{ New-NetFirewallRule -DisplayName 'CoopLink - Capture Service' -Direction Inbound -Program '{app}\cooplink-capture-service.exe' -Action Allow -Profile Any -ErrorAction SilentlyContinue }}"""; Flags: runhidden; Tasks: firewall
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [Code]

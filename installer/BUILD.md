@@ -42,6 +42,20 @@ Sortie : `dist\CoopLink-Setup-v1.0.0.exe`.
 - tâche pare-feu : règles entrantes pour `cooplink.exe` et l'UDP 42422 ;
 - demande l'élévation administrateur (`PrivilegesRequired=admin`), indispensable pour un pilote noyau.
 
+## 3 bis. Prérequis côté utilisateur final
+
+Rien à installer à la main, tout est dans le setup :
+
+- **Aucune dépendance Visual C++** : les binaires sont compilés avec la CRT statique
+  (`.cargo/config.toml` → `+crt-static`). Pas de `VC_redist.x64.exe` à déployer.
+- **ViGEmBus** embarqué et installé silencieusement si absent.
+- **Pare-feu** configuré à l'installation : UDP 42422 (tunnel), TCP 47500 (diffusion),
+  règle programme pour `cooplink-capture-service.exe`.
+- Pas de .NET, pas de WebView2, pas de DirectX Redistributable.
+
+Seule dépendance qui ne peut pas être embarquée : le **pilote graphique** (OpenGL 3.3+),
+fourni par Windows Update ou le constructeur du GPU.
+
 ## 4. Vérifier après installation
 
 1. `services.msc` → le service **ViGEmBus** est présent et démarré.
