@@ -8,6 +8,8 @@
 mod stream_settings;
 #[path = "../streaming/stream_crypto.rs"]
 mod stream_crypto;
+#[path = "../streaming/video_codec.rs"]
+mod video_codec;
 
 use parking_lot::Mutex;
 use std::collections::{HashSet, VecDeque};
@@ -20,9 +22,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 use stream_settings::{
     FpsLadder, RateControl, RateController, StreamSettings, StreamStats, FRAME_HEADER_LEN,
-    FRAME_KIND_AUDIO, FRAME_KIND_VIDEO, FRAME_MAGIC, MAX_FRAME_BYTES,
+    FRAME_KIND_AUDIO, FRAME_KIND_HEVC, FRAME_KIND_INFO, FRAME_KIND_VIDEO, FRAME_MAGIC,
+    MAX_FRAME_BYTES,
 };
 use stream_crypto::{auth_token, constant_time_eq, from_hex, StreamCipher};
+use video_codec::{find_ffmpeg, probe_encoder, Codec, VideoEncoder};
 use tracing::{debug, error, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -1027,6 +1031,7 @@ fn handle_client(
     running: Arc<AtomicBool>,
     target: Arc<Mutex<engine::CaptureTarget>>,
     auth_timeout: Duration,
+    codec: Codec,
 ) {
     let peer = stream
         .peer_addr()
@@ -1104,6 +1109,51 @@ fn handle_client(
     }
     info!("Client de diffusion authentifié : {}", peer);
     let _ = stream.set_read_timeout(None);
+
+    // ---- encodeur vidéo -------------------------------------------------
+    let mut encoder = if codec != Codec::Jpeg {
+        find_ffmpeg().and_then(|ffmpeg| {
+            VideoEncoder::start(
+                &ffmpeg,
+                codec,
+                settings.width,
+                settings.height,
+                settings.fps,
+                settings.bitrate_kbps,
+            )
+        })
+    } else {
+        None
+    };
+    if encoder.is_none() && codec != Codec::Jpeg {
+        warn!("Encodeur H.264 indisponible (ffmpeg absent ou codec refusé) : repli JPEG.");
+    }
+    if let Some(enc) = encoder.as_ref() {
+        info!(
+            "Diffusion H.264 ({:?}) {}x{} @ {} FPS, cible {} kbps",
+            enc.codec, enc.width, enc.height, settings.fps, settings.bitrate_kbps
+        );
+        // Dimensions annoncées une fois : le client démarre son décodeur.
+        let mut info_payload = Vec::with_capacity(5);
+        info_payload.extend_from_slice(&(enc.width as u16).to_le_bytes());
+        info_payload.extend_from_slice(&(enc.height as u16).to_le_bytes());
+        info_payload.push(1);
+        if let Some(sealed) = cipher.seal(&info_payload) {
+            let mut header = [0u8; FRAME_HEADER_LEN];
+            write_header(
+                &mut header,
+                FRAME_KIND_INFO,
+                enc.width as u16,
+                enc.height as u16,
+                sealed.len() as u32,
+            );
+            header[5] = 1;
+            let _ = stream
+                .write_all(&header)
+                .and_then(|_| stream.write_all(&sealed))
+                .and_then(|_| stream.flush());
+        }
+    }
 
     stats.clients.fetch_add(1, Ordering::Relaxed);
     let mut pad = VirtualPad::open();
@@ -1205,48 +1255,59 @@ fn handle_client(
 
         if let Some((seq, frame)) = frames.latest_after(last_seq) {
             last_seq = seq;
-            let quality = if settings.rate_control == RateControl::Quality {
-                settings.quality_max
-            } else {
-                controller.quality()
-            };
 
-            if let Some(jpeg) = encode_frame(&frame.rgb, frame.width, frame.height, quality) {
-                if let Some(payload) = cipher.seal(&jpeg) {
-                if payload.len() <= MAX_FRAME_BYTES {
-                    let mut header = [0u8; FRAME_HEADER_LEN];
-                    write_header(
-                        &mut header,
-                        FRAME_KIND_VIDEO,
-                        frame.width as u16,
-                        frame.height as u16,
-                        payload.len() as u32,
-                    );
-                    header[5] = 1; // chiffré
-                    let sent = stream
-                        .write_all(&header)
-                        .and_then(|_| stream.write_all(&payload))
-                        .and_then(|_| stream.flush());
-                    match sent {
-                        Ok(()) => {
-                            window_bits += (payload.len() as u64 + FRAME_HEADER_LEN as u64) * 8;
-                            stats.frames_sent.fetch_add(1, Ordering::Relaxed);
-                            stats
-                                .bytes_sent
-                                .fetch_add(payload.len() as u64, Ordering::Relaxed);
-                            stats.quality.store(quality, Ordering::Relaxed);
-                        }
-                        Err(e) => {
-                            // Skip this frame instead of stalling the capture loop.
-                            stats.dropped.fetch_add(1, Ordering::Relaxed);
-                            if e.kind() == std::io::ErrorKind::BrokenPipe
-                                || e.kind() == std::io::ErrorKind::ConnectionReset
-                            {
-                                break;
+            if let Some(enc) = encoder.as_mut() {
+                // Chemin H.264 : l'encodeur gère le débit, on pousse l'image brute.
+                if !enc.write_frame(&frame.rgb) {
+                    warn!("Encodeur vidéo interrompu, fin de la session {}", peer);
+                    break;
+                }
+                stats.width.store(frame.width, Ordering::Relaxed);
+                stats.height.store(frame.height, Ordering::Relaxed);
+            } else {
+                let quality = if settings.rate_control == RateControl::Quality {
+                    settings.quality_max
+                } else {
+                    controller.quality()
+                };
+
+                if let Some(jpeg) = encode_frame(&frame.rgb, frame.width, frame.height, quality) {
+                    if let Some(payload) = cipher.seal(&jpeg) {
+                        if payload.len() <= MAX_FRAME_BYTES {
+                            let mut header = [0u8; FRAME_HEADER_LEN];
+                            write_header(
+                                &mut header,
+                                FRAME_KIND_VIDEO,
+                                frame.width as u16,
+                                frame.height as u16,
+                                payload.len() as u32,
+                            );
+                            header[5] = 1; // chiffré
+                            let sent = stream
+                                .write_all(&header)
+                                .and_then(|_| stream.write_all(&payload))
+                                .and_then(|_| stream.flush());
+                            match sent {
+                                Ok(()) => {
+                                    window_bits +=
+                                        (payload.len() as u64 + FRAME_HEADER_LEN as u64) * 8;
+                                    stats.frames_sent.fetch_add(1, Ordering::Relaxed);
+                                    stats
+                                        .bytes_sent
+                                        .fetch_add(payload.len() as u64, Ordering::Relaxed);
+                                    stats.quality.store(quality, Ordering::Relaxed);
+                                }
+                                Err(e) => {
+                                    stats.dropped.fetch_add(1, Ordering::Relaxed);
+                                    if e.kind() == std::io::ErrorKind::BrokenPipe
+                                        || e.kind() == std::io::ErrorKind::ConnectionReset
+                                    {
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
-                }
                 }
             }
 
@@ -1275,7 +1336,31 @@ fn handle_client(
                 }
             }
 
-            // Short review window: reacts to a congestion spike in 400 ms.
+            // Chunks H.264 déjà encodés (indépendants de la cadence d'images).
+            if let Some(enc) = encoder.as_mut() {
+                for chunk in enc.drain() {
+                    if let Some(sealed) = cipher.seal(&chunk) {
+                        let mut header = [0u8; FRAME_HEADER_LEN];
+                        write_header(
+                            &mut header,
+                            FRAME_KIND_HEVC,
+                            enc.width as u16,
+                            enc.height as u16,
+                            sealed.len() as u32,
+                        );
+                        header[5] = 1;
+                        window_bits += (sealed.len() as u64 + FRAME_HEADER_LEN as u64) * 8;
+                        if stream
+                            .write_all(&header)
+                            .and_then(|_| stream.write_all(&sealed))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+
             let requested = requested_kbps.load(Ordering::Relaxed);
             if requested > 0 && requested != applied_kbps {
                 controller.set_target_kbps(requested);
@@ -1283,6 +1368,7 @@ fn handle_client(
                 info!("Débit cible ajusté à la demande du client : {} kbps", requested);
             }
 
+            // Fenêtre courte : réaction à un pic de congestion en 400 ms.
             let elapsed = window_start.elapsed();
             if elapsed >= Duration::from_millis(400) {
                 let quality = controller.review(window_bits, elapsed);
@@ -1347,6 +1433,32 @@ fn main() {
             &settings.encoder
         }
     );
+
+    // Choix de l'encodeur : NVENC si ffmpeg + GPU le permettent, sinon libx264,
+    // sinon repli JPEG (intra-image).
+    let codec = {
+        match find_ffmpeg() {
+            Some(ffmpeg) => {
+                if probe_encoder(&ffmpeg, "h264_nvenc") {
+                    info!("Encodeur vidéo : H.264 NVENC ({}).", ffmpeg.display());
+                    Codec::Nvenc
+                } else if probe_encoder(&ffmpeg, "libx264") {
+                    info!(
+                        "Encodeur vidéo : H.264 logiciel libx264 ({}).",
+                        ffmpeg.display()
+                    );
+                    Codec::Software
+                } else {
+                    warn!("ffmpeg ne fournit aucun encodeur H.264 : repli JPEG.");
+                    Codec::Jpeg
+                }
+            }
+            None => {
+                warn!("ffmpeg introuvable : repli JPEG (qualité limitée). Placez ffmpeg.exe à côté de cooplink.exe.");
+                Codec::Jpeg
+            }
+        }
+    };
 
     let running = Arc::new(AtomicBool::new(true));
     let frames = Arc::new(FrameSlot::new());
@@ -1531,7 +1643,11 @@ fn main() {
                     audio_active: stats.audio_ok.load(Ordering::Relaxed),
                     audio_device: stats.audio_device_name.lock().clone(),
                     audio_error: stats.audio_error.lock().clone(),
-                    message,
+                    message: if codec == Codec::Jpeg {
+                        format!("{} (JPEG)", message)
+                    } else {
+                        message
+                    },
                     updated_ms: 0,
                 }
                 .publish();
@@ -1614,6 +1730,7 @@ fn main() {
                             running_r.clone(),
                             target_r.clone(),
                             Duration::from_secs(1800),
+                            codec,
                         );
                     }
                 }
@@ -1642,6 +1759,7 @@ fn main() {
                         running,
                         target,
                         Duration::from_secs(5),
+                        codec,
                     )
                 });
             }

@@ -25,6 +25,10 @@ pub const FRAME_HEADER_LEN: usize = 16;
 pub const FRAME_MAGIC: [u8; 4] = *b"CLK3";
 pub const FRAME_KIND_VIDEO: u8 = 1;
 pub const FRAME_KIND_AUDIO: u8 = 2;
+/// Chunk de flux H.264 élémentaire (encodeur inter-images).
+pub const FRAME_KIND_HEVC: u8 = 3;
+/// Métadonnées de flux (largeur, hauteur, codec) envoyées une fois.
+pub const FRAME_KIND_INFO: u8 = 4;
 
 fn default_stream_port() -> u16 {
     DEFAULT_STREAM_PORT

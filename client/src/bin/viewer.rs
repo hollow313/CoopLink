@@ -8,6 +8,8 @@
 mod stream_settings;
 #[path = "../streaming/stream_crypto.rs"]
 mod stream_crypto;
+#[path = "../streaming/video_codec.rs"]
+mod video_codec;
 
 use eframe::egui::{
     self, Color32, FontId, Key, Pos2, Rect, RichText, Rounding, TextureHandle, TextureOptions,
@@ -22,7 +24,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use stream_settings::{
-    FRAME_HEADER_LEN, FRAME_KIND_AUDIO, FRAME_KIND_VIDEO, FRAME_MAGIC, MAX_FRAME_BYTES,
+    FRAME_HEADER_LEN, FRAME_KIND_AUDIO, FRAME_KIND_HEVC, FRAME_KIND_INFO, FRAME_KIND_VIDEO,
+    FRAME_MAGIC, MAX_FRAME_BYTES,
 };
 
 const COLOR_BG: Color32 = Color32::from_rgb(10, 15, 30);
@@ -617,6 +620,7 @@ impl ViewerApp {
                     }
                 }
 
+                let mut decoder: Option<video_codec::VideoDecoder> = None;
                 let mut header = [0u8; FRAME_HEADER_LEN];
                 let mut window_start = Instant::now();
                 let mut window_bytes: u64 = 0;
@@ -652,7 +656,48 @@ impl ViewerApp {
                         None => break,
                     };
 
-                    if kind == FRAME_KIND_VIDEO {
+                    if kind == FRAME_KIND_INFO {
+                        if payload.len() >= 4 {
+                            let w = u16::from_le_bytes([payload[0], payload[1]]) as usize;
+                            let h = u16::from_le_bytes([payload[2], payload[3]]) as usize;
+                            if let Some(ffmpeg) = video_codec::find_ffmpeg() {
+                                if let Some(mut dec) = video_codec::VideoDecoder::start(&ffmpeg) {
+                                    if let Some(mut out) = dec.take_stdout() {
+                                        let img_slot = frame_clone.clone();
+                                        let st = state_stream.clone();
+                                        let run = running_conn.clone();
+                                        thread::spawn(move || {
+                                            while let Some(rgba) = video_codec::read_rgba_frame(
+                                                &mut out, w, h, &run,
+                                            ) {
+                                                let color = egui::ColorImage::from_rgba_unmultiplied(
+                                                    [w, h], &rgba,
+                                                );
+                                                *img_slot.lock() = Some(color);
+                                                let mut s = st.lock();
+                                                s.received_frames += 1;
+                                                s.width = w as u32;
+                                                s.height = h as u32;
+                                            }
+                                        });
+                                    }
+                                    decoder = Some(dec);
+                                } else {
+                                    state_stream.lock().status = "décodeur H.264 indisponible".to_string();
+                                }
+                            }
+                        }
+                    } else if kind == FRAME_KIND_HEVC {
+                        match decoder.as_mut() {
+                            Some(dec) => {
+                                if !dec.feed(&payload) {
+                                    break;
+                                }
+                            }
+                            None => break,
+                        }
+                        window_bytes += (len + FRAME_HEADER_LEN) as u64;
+                    } else if kind == FRAME_KIND_VIDEO {
                         if let Ok(img) = image::load_from_memory(&payload) {
                             let rgba = img.to_rgba8();
                             let size = [rgba.width() as usize, rgba.height() as usize];

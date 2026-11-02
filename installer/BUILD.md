@@ -52,6 +52,10 @@ Rien à installer à la main, tout est dans le setup :
 - **Pare-feu** configuré à l'installation : UDP 42422 (tunnel), TCP 47500 (diffusion),
   règle programme pour `cooplink-capture-service.exe`.
 - Pas de .NET, pas de WebView2, pas de DirectX Redistributable.
+- **ffmpeg (optionnel mais recommandé)** : c'est l'encodeur vidéo H.264. Télécharge la build
+  « essentials » de https://www.gyan.dev/ffmpeg/builds/, renomme `ffmpeg.exe`, place-le dans
+  `installer\redist\ffmpeg.exe` pour qu'il soit embarqué, et/ou à côté de `cooplink.exe`.
+  Sans lui, CoopLink retombe sur l'encodage JPEG (image plus pixelisée).
 
 Seule dépendance qui ne peut pas être embarquée : le **pilote graphique** (OpenGL 3.3+),
 fourni par Windows Update ou le constructeur du GPU.
