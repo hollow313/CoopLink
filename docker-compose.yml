@@ -11,6 +11,8 @@ services:
       - "47510:47510"  # relais TCP (repli CGNAT)
       # Port UDP gaming (coordination, attribution des IDs, traversée NAT et relais)
       - "30024:30024/udp"
+      # HTTP interne (reverse proxy https://cooplink.home-lh.ovh -> 30024)
+      - "30024:30024/tcp"
       # Port TCP Web (Interface d'administration et monitoring en direct)
       - "30025:30025/tcp"
     environment:

@@ -41,6 +41,7 @@ USER 568:568
 
 ENV PORT_UDP=30024 \
     PORT_WEB=30025 \
+    PORT_RELAY=47510 \
     DATA_DIR=/data \
     SERVER_NAME="CoopLink Master Hub" \
     RUST_LOG=info
@@ -49,6 +50,7 @@ ENV PORT_UDP=30024 \
 EXPOSE 30024/udp
 EXPOSE 30024/tcp
 EXPOSE 30025/tcp
+EXPOSE 47510/tcp
 
 VOLUME ["/data"]
 
