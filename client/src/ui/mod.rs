@@ -1343,7 +1343,7 @@ impl CoopLinkApp {
         let server_str = self.config.remote_server_address.trim().to_string();
         let room_code = self.state.room_code.trim().to_string();
 
-        let server_addr: SocketAddr = match server_str.parse() {
+        let mut server_addr: SocketAddr = match server_str.parse() {
             Ok(addr) => addr,
             Err(_) => match format!("{}:{}", server_str, self.config.listen_port).parse() {
                 Ok(addr) => addr,
@@ -1353,6 +1353,24 @@ impl CoopLinkApp {
                 }
             },
         };
+
+        // Les adresses partagées par les versions précédentes portaient le port du flux
+        // vidéo (47500, TCP) au lieu de celui du tunnel (42422, UDP) : on corrige à la
+        // volée pour qu'une invitation déjà envoyée reste utilisable.
+        if server_addr.port() == crate::streaming::settings::DEFAULT_STREAM_PORT
+            && self.config.listen_port != crate::streaming::settings::DEFAULT_STREAM_PORT
+        {
+            let corrected = SocketAddr::new(server_addr.ip(), self.config.listen_port);
+            self.add_log(
+                LogLevel::Warning,
+                &format!(
+                    "Port {} (flux vidéo) détecté dans l'adresse : correction automatique vers le tunnel UDP {}.",
+                    server_addr.port(),
+                    self.config.listen_port
+                ),
+            );
+            server_addr = corrected;
+        }
 
         self.state.status = ConnectionStatus::Connecting;
         self.state.role = NodeRole::Client;
