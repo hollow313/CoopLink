@@ -1,39 +1,185 @@
-// CoopLink Stream Viewer - High Performance Co-op Game Streaming Viewer (60/120 FPS + Audio)
-// Real-time Screen & Game Display + Continuous Key Inputs & Mouse Look & Stereo Audio
+// CoopLink Stream Viewer
+// Displays the shared game, plays the host audio and forwards keyboard/mouse input.
 // Copyright (c) 2026 Loic HUON. All Rights Reserved.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use eframe::egui::{self, Color32, FontId, Key, Pos2, Rect, RichText, Rounding, Stroke, TextureHandle, TextureOptions, Vec2};
+#[path = "../streaming/settings.rs"]
+mod stream_settings;
+
+use eframe::egui::{
+    self, Color32, FontId, Key, Pos2, Rect, RichText, Rounding, TextureHandle, TextureOptions,
+    Vec2,
+};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream, UdpSocket};
+use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+use stream_settings::{
+    FRAME_HEADER_LEN, FRAME_KIND_AUDIO, FRAME_KIND_VIDEO, FRAME_MAGIC, MAX_FRAME_BYTES,
+};
 
 const COLOR_BG: Color32 = Color32::from_rgb(10, 15, 30);
 const COLOR_CARD: Color32 = Color32::from_rgb(20, 28, 48);
-const COLOR_ACCENT: Color32 = Color32::from_rgb(0, 186, 136); // Vert Co-op
+const COLOR_ACCENT: Color32 = Color32::from_rgb(0, 186, 136);
 const COLOR_BLUE: Color32 = Color32::from_rgb(0, 102, 255);
+const COLOR_MUTED: Color32 = Color32::from_rgb(148, 163, 184);
 
-#[allow(dead_code)]
-#[derive(Default)]
-struct ViewerState {
-    connected_to_host: bool,
-    host_addr: String,
-    game_title: String,
-    fps: f32,
-    latency_ms: f32,
-    received_frames: u64,
-    audio_active: bool,
-    controller_slot: u8,
+// ---------------------------------------------------------------------------
+// Command line
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+struct ViewerArgs {
+    host: String,
+    port: u16,
+    title: String,
+    width: u32,
+    height: u32,
+    fps: u32,
+    bitrate_kbps: u32,
+    fullscreen: bool,
+    audio: bool,
+    send_input: bool,
+    /// 1 = host key set, 2 = guest key set (arrows + numpad).
+    player: u8,
+    /// Two-keyboard mode disables the guest mouse so it cannot steal the host cursor.
+    mouse: bool,
+    /// Forward the guest's XInput pad to the host's virtual controller.
+    gamepad: bool,
 }
 
-// Initialise le moteur de lecture audio cpal sur le périphérique de sortie par défaut
-fn start_audio_playback(audio_buffer: Arc<Mutex<VecDeque<f32>>>, running: Arc<AtomicBool>) {
+impl Default for ViewerArgs {
+    fn default() -> Self {
+        Self {
+            host: "10.244.0.1".to_string(),
+            port: stream_settings::DEFAULT_STREAM_PORT,
+            title: "Session partagée".to_string(),
+            width: 1920,
+            height: 1080,
+            fps: 60,
+            bitrate_kbps: 30_000,
+            fullscreen: false,
+            audio: true,
+            send_input: true,
+            player: 1,
+            mouse: true,
+            gamepad: true,
+        }
+    }
+}
+
+fn parse_args() -> ViewerArgs {
+    let argv: Vec<String> = std::env::args().collect();
+    let mut args = ViewerArgs::default();
+    let mut positional: Vec<String> = Vec::new();
+    let mut i = 1;
+
+    while i < argv.len() {
+        let token = argv[i].as_str();
+        let mut next = |i: &mut usize| -> Option<String> {
+            *i += 1;
+            argv.get(*i).cloned()
+        };
+        match token {
+            "stream" | "display" => {}
+            "--host" => {
+                if let Some(v) = next(&mut i) {
+                    args.host = v;
+                }
+            }
+            "--port" => {
+                if let Some(v) = next(&mut i) {
+                    if let Ok(p) = v.parse() {
+                        args.port = p;
+                    }
+                }
+            }
+            "--title" | "--game" => {
+                if let Some(v) = next(&mut i) {
+                    args.title = v;
+                }
+            }
+            "--width" => {
+                if let Some(v) = next(&mut i) {
+                    args.width = v.parse().unwrap_or(args.width);
+                }
+            }
+            "--height" => {
+                if let Some(v) = next(&mut i) {
+                    args.height = v.parse().unwrap_or(args.height);
+                }
+            }
+            "--fps" => {
+                if let Some(v) = next(&mut i) {
+                    args.fps = v.parse().unwrap_or(args.fps);
+                }
+            }
+            "--bitrate" => {
+                if let Some(v) = next(&mut i) {
+                    args.bitrate_kbps = v.parse().unwrap_or(args.bitrate_kbps);
+                }
+            }
+            "--fullscreen" | "--borderless" => args.fullscreen = true,
+            "--windowed" => args.fullscreen = false,
+            "--mute" => args.audio = false,
+            "--view-only" => args.send_input = false,
+            "--no-mouse" => args.mouse = false,
+            "--no-gamepad" => args.gamepad = false,
+            "--player" => {
+                if let Some(v) = next(&mut i) {
+                    args.player = v.parse().unwrap_or(1);
+                }
+            }
+            other if !other.starts_with('-') => positional.push(other.to_string()),
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if let Some(host) = positional.first() {
+        if !host.is_empty() && !host.eq_ignore_ascii_case("stream") {
+            args.host = host.clone();
+        }
+    }
+    if let Some(title) = positional.get(1) {
+        args.title = title.clone();
+    }
+    args
+}
+
+// ---------------------------------------------------------------------------
+// Audio playback
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct AudioSink {
+    samples: VecDeque<f32>,
+    input_rate: u32,
+    input_channels: usize,
+}
+
+impl AudioSink {
+    fn push(&mut self, pcm: &[u8], rate: u32, channels: usize) {
+        self.input_rate = rate.max(8_000);
+        self.input_channels = channels.clamp(1, 2);
+        for chunk in pcm.chunks_exact(2) {
+            let v = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
+            self.samples.push_back(v);
+        }
+        // ~250 ms of stereo headroom, drop the oldest on overflow.
+        while self.samples.len() > 48_000 {
+            self.samples.pop_front();
+        }
+    }
+}
+
+/// Plays the received PCM at 48 kHz stereo, resampling linearly if the host is not at 48 kHz.
+fn start_audio_playback(sink: Arc<Mutex<AudioSink>>, running: Arc<AtomicBool>) {
     thread::spawn(move || {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
@@ -43,23 +189,67 @@ fn start_audio_playback(audio_buffer: Arc<Mutex<VecDeque<f32>>>, running: Arc<At
             None => return,
         };
 
-        let config = match device.default_output_config() {
-            Ok(c) => c.config(),
-            Err(_) => return,
+        let mut config = None;
+        if let Ok(configs) = device.supported_output_configs() {
+            for cfg in configs {
+                if cfg.channels() == 2 && cfg.min_sample_rate() <= 48_000 && cfg.max_sample_rate() >= 48_000 {
+                    config = Some(cfg.with_sample_rate(48_000).config());
+                    break;
+                }
+            }
+        }
+        let config = config.or_else(|| device.default_output_config().ok().map(|c| c.config()));
+        let config = match config {
+            Some(c) => c,
+            None => return,
         };
-
-        let channels = config.channels as usize;
-        let buf_clone = audio_buffer.clone();
+        let out_rate = config.sample_rate as f64;
+        let out_channels = config.channels as usize;
+        let sink_clone = sink.clone();
 
         let stream = device.build_output_stream(
             config,
             move |output: &mut [f32], _| {
-                let mut q = buf_clone.lock();
-                for frame in output.chunks_mut(channels) {
-                    let sample = q.pop_front().unwrap_or(0.0);
-                    for channel_sample in frame.iter_mut() {
-                        *channel_sample = sample;
+                let mut state = sink_clone.lock();
+                let in_channels = state.input_channels.max(1);
+                let step = state.input_rate as f64 / out_rate;
+                let mut pos = 0.0f64;
+
+                if state.samples.len() < in_channels {
+                    for sample in output.iter_mut() {
+                        *sample = 0.0;
                     }
+                    return;
+                }
+
+                for frame in output.chunks_mut(out_channels) {
+                    let idx = (pos as usize) * in_channels;
+                    if idx + in_channels > state.samples.len() {
+                        for s in frame.iter_mut() {
+                            *s = 0.0;
+                        }
+                        continue;
+                    }
+                    let left = state.samples[idx];
+                    let right = if in_channels > 1 {
+                        state.samples[idx + 1]
+                    } else {
+                        left
+                    };
+                    for (ch, s) in frame.iter_mut().enumerate() {
+                        // Mono downmix for a 1-channel sink, swap-free stereo otherwise.
+                        *s = if ch == 0 { left } else { right };
+                    }
+                    pos += step;
+                    if pos as usize * in_channels + in_channels > state.samples.len() {
+                        pos = 0.0;
+                    }
+                }
+
+                // Drop what has been consumed so the queue does not drift.
+                let consumed = (pos as usize) * in_channels;
+                for _ in 0..consumed.min(state.samples.len()) {
+                    state.samples.pop_front();
                 }
             },
             |_err| {},
@@ -69,361 +259,539 @@ fn start_audio_playback(audio_buffer: Arc<Mutex<VecDeque<f32>>>, running: Arc<At
         if let Ok(st) = stream {
             let _ = st.play();
             while running.load(Ordering::Relaxed) {
-                thread::sleep(Duration::from_millis(50));
+                thread::sleep(Duration::from_millis(100));
             }
         }
     });
 }
 
+// ---------------------------------------------------------------------------
+// Runtime state
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct ViewerState {
+    connected: bool,
+    host_addr: String,
+    game_title: String,
+    received_fps: f32,
+    received_kbps: f32,
+    width: u32,
+    height: u32,
+    audio_active: bool,
+    received_frames: u64,
+    dropped: u64,
+    status: String,
+}
+
 struct ViewerApp {
     state: Arc<Mutex<ViewerState>>,
     frame_image: Arc<Mutex<Option<egui::ColorImage>>>,
+    frame_size: Vec2,
     texture: Option<TextureHandle>,
     tcp_tx: Arc<Mutex<Option<TcpStream>>>,
-    active_keys: Vec<String>,
+    active_keys: Vec<u16>,
     last_input_time: Instant,
-    last_mouse_time: Instant,
-    mouse_l_down: bool,
-    mouse_r_down: bool,
-    last_fps_calc: Instant,
-    frame_count: u32,
+    fullscreen: bool,
+    wants_input: bool,
+    player: u8,
+    mouse_enabled: bool,
 }
 
+/// Keyboard map: egui key -> Windows virtual-key code.
+const KEY_MAP: &[(Key, u16)] = &[
+    (Key::A, 0x41),
+    (Key::B, 0x42),
+    (Key::C, 0x43),
+    (Key::D, 0x44),
+    (Key::E, 0x45),
+    (Key::F, 0x46),
+    (Key::G, 0x47),
+    (Key::H, 0x48),
+    (Key::I, 0x49),
+    (Key::J, 0x4A),
+    (Key::K, 0x4B),
+    (Key::L, 0x4C),
+    (Key::M, 0x4D),
+    (Key::N, 0x4E),
+    (Key::O, 0x4F),
+    (Key::P, 0x50),
+    (Key::Q, 0x51),
+    (Key::R, 0x52),
+    (Key::S, 0x53),
+    (Key::T, 0x54),
+    (Key::U, 0x55),
+    (Key::V, 0x56),
+    (Key::W, 0x57),
+    (Key::X, 0x58),
+    (Key::Y, 0x59),
+    (Key::Z, 0x5A),
+    (Key::Num0, 0x30),
+    (Key::Num1, 0x31),
+    (Key::Num2, 0x32),
+    (Key::Num3, 0x33),
+    (Key::Num4, 0x34),
+    (Key::Num5, 0x35),
+    (Key::Num6, 0x36),
+    (Key::Num7, 0x37),
+    (Key::Num8, 0x38),
+    (Key::Num9, 0x39),
+    (Key::Space, 0x20),
+    (Key::Enter, 0x0D),
+    (Key::Escape, 0x1B),
+    (Key::Tab, 0x09),
+    (Key::Backspace, 0x08),
+    (Key::Delete, 0x2E),
+    (Key::Insert, 0x2D),
+    (Key::Home, 0x24),
+    (Key::End, 0x23),
+    (Key::PageUp, 0x21),
+    (Key::PageDown, 0x22),
+    (Key::ArrowLeft, 0x25),
+    (Key::ArrowUp, 0x26),
+    (Key::ArrowRight, 0x27),
+    (Key::ArrowDown, 0x28),
+    (Key::F1, 0x70),
+    (Key::F2, 0x71),
+    (Key::F3, 0x72),
+    (Key::F4, 0x73),
+    (Key::F5, 0x74),
+    (Key::F6, 0x75),
+    (Key::F7, 0x76),
+    (Key::F8, 0x77),
+];
+
+/// Second keyboard -> dedicated Player 2 key set, so two players can share one game
+/// without a virtual gamepad driver. Arrows to move, numpad for actions.
+fn translate_player2(vk: u16) -> u16 {
+    match vk {
+        0x57 => 0x26, // W -> Up
+        0x53 => 0x28, // S -> Down
+        0x41 => 0x25, // A -> Left
+        0x44 => 0x27, // D -> Right
+        0x20 => 0x60, // Space -> Numpad 0 (action / jump)
+        0x45 => 0x61, // E -> Numpad 1 (interact)
+        0x46 => 0x62, // F -> Numpad 2 (secondary action)
+        0x51 => 0x63, // Q -> Numpad 3
+        0x52 => 0x64, // R -> Numpad 4 (reload)
+        0x43 => 0x65, // C -> Numpad 5 (crouch)
+        0x09 => 0x66, // Tab -> Numpad 6 (scoreboard)
+        0x10 => 0xA1, // Shift -> Right Shift (sprint)
+        0x11 => 0xA3, // Ctrl -> Right Ctrl (crouch)
+        0x12 => 0xA5, // Alt -> Right Alt
+        other => other,
+    }
+}
+
+/// Reads the guest's XInput pad and streams its state to the host, which feeds it
+/// into a virtual Xbox 360 controller (ViGEmBus).
+#[cfg(windows)]
+fn start_gamepad_forwarding(tcp_tx: Arc<Mutex<Option<TcpStream>>>, running: Arc<AtomicBool>) {
+    use windows_sys::Win32::UI::Input::XboxController::{XInputGetState, XINPUT_STATE};
+
+    thread::spawn(move || {
+        let mut state: XINPUT_STATE = unsafe { std::mem::zeroed() };
+        let mut was_connected = false;
+        while running.load(Ordering::Relaxed) {
+            let rc = unsafe { XInputGetState(0, &mut state) };
+            if rc == 0 {
+                was_connected = true;
+                let g = &state.Gamepad;
+                let line = format!(
+                    "G {:04X} {} {} {} {} {} {}\n",
+                    g.wButtons,
+                    g.bLeftTrigger,
+                    g.bRightTrigger,
+                    g.sThumbLX,
+                    g.sThumbLY,
+                    g.sThumbRX,
+                    g.sThumbRY
+                );
+                if let Some(sock) = tcp_tx.lock().as_mut() {
+                    let _ = sock.write_all(line.as_bytes());
+                }
+            } else if was_connected {
+                // Pad unplugged: release everything on the host side.
+                was_connected = false;
+                if let Some(sock) = tcp_tx.lock().as_mut() {
+                    let _ = sock.write_all(b"G 0000 0 0 0 0 0 0\n");
+                }
+            }
+            thread::sleep(Duration::from_millis(16));
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn start_gamepad_forwarding(_tx: Arc<Mutex<Option<TcpStream>>>, _running: Arc<AtomicBool>) {}
+
 impl ViewerApp {
-    pub fn new(host_ip: String, game_title: String) -> Self {
+    fn new(args: ViewerArgs) -> Self {
         let state = Arc::new(Mutex::new(ViewerState {
-            connected_to_host: false,
-            host_addr: host_ip.clone(),
-            game_title,
-            fps: 60.0,
-            latency_ms: 3.2,
-            received_frames: 0,
-            audio_active: false,
-            controller_slot: 2,
+            connected: false,
+            host_addr: format!("{}:{}", args.host, args.port),
+            game_title: args.title.clone(),
+            status: "connexion...".to_string(),
+            ..Default::default()
         }));
 
         let frame_image = Arc::new(Mutex::new(None));
         let tcp_tx = Arc::new(Mutex::new(None));
-        let audio_buffer = Arc::new(Mutex::new(VecDeque::with_capacity(96_000)));
+        let sink = Arc::new(Mutex::new(AudioSink::default()));
         let running = Arc::new(AtomicBool::new(true));
 
-        // Démarrage du thread de lecture audio
-        start_audio_playback(audio_buffer.clone(), running.clone());
+        if args.audio {
+            start_audio_playback(sink.clone(), running.clone());
+        }
+        if args.gamepad {
+            start_gamepad_forwarding(tcp_tx.clone(), running.clone());
+        }
 
-        // Thread de réception vidéo et audio TCP en temps réel (Port 47989)
         let state_stream = state.clone();
-        let frame_img_clone = frame_image.clone();
-        let tcp_tx_clone = tcp_tx.clone();
-        let audio_buf_clone = audio_buffer.clone();
-        let host_target = host_ip.clone();
+        let frame_clone = frame_image.clone();
+        let tx_clone = tcp_tx.clone();
+        let sink_clone = sink.clone();
         let running_conn = running.clone();
+        let host = args.host.clone();
+        let port = args.port;
+        let requested_kbps = args.bitrate_kbps;
 
         thread::spawn(move || {
-            let clean_host = host_target.split(':').next().unwrap_or(&host_target).trim().to_string();
-            let mut candidates = vec![
-                format!("{}:47989", clean_host),
-                "10.244.0.1:47989".to_string(),
-                "127.0.0.1:47989".to_string(),
+            let clean_host = host
+                .split(':')
+                .next()
+                .unwrap_or(&host)
+                .trim()
+                .to_string();
+            let candidates = vec![
+                format!("{}:{}", clean_host, port),
+                format!("10.244.0.1:{}", port),
+                format!("127.0.0.1:{}", port),
             ];
-            candidates.dedup();
 
             while running_conn.load(Ordering::Relaxed) {
-                let mut connected_stream = None;
-                for cand in &candidates {
-                    if let Ok(addr) = cand.parse::<SocketAddr>() {
-                        if let Ok(s) = TcpStream::connect_timeout(&addr, Duration::from_millis(1500)) {
-                            connected_stream = Some(s);
+                let mut connected = None;
+                for candidate in &candidates {
+                    if let Ok(addr) = candidate.parse::<SocketAddr>() {
+                        if let Ok(s) =
+                            TcpStream::connect_timeout(&addr, Duration::from_millis(1200))
+                        {
+                            connected = Some((s, candidate.clone()));
                             break;
                         }
                     }
                 }
 
-                if let Some(mut stream) = connected_stream {
-                    let _ = stream.set_nodelay(true);
-                    state_stream.lock().connected_to_host = true;
+                let Some((mut stream, addr)) = connected else {
+                    state_stream.lock().status = "hôte injoignable".to_string();
+                    thread::sleep(Duration::from_millis(1000));
+                    continue;
+                };
 
-                    if let Ok(clone_stream) = stream.try_clone() {
-                        *tcp_tx_clone.lock() = Some(clone_stream);
+                let _ = stream.set_nodelay(true);
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(2000)));
+                {
+                    let mut st = state_stream.lock();
+                    st.connected = true;
+                    st.host_addr = addr.clone();
+                    st.status = "connecté".to_string();
+                }
+                if let Ok(tx) = stream.try_clone() {
+                    *tx_clone.lock() = Some(tx);
+                    let mut guard = tx_clone.lock();
+                    if let Some(sock) = guard.as_mut() {
+                        // Ask the host to focus the game and honour our bitrate request.
+                        let _ = sock.write_all(b"F\n");
+                        let _ = sock.write_all(format!("B {}\n", requested_kbps).as_bytes());
                     }
-
-                    // Boucle de lecture des trames CLFR (Vidéo) et CLAU (Audio)
-                    let mut header = [0u8; 12];
-                    while running_conn.load(Ordering::Relaxed) {
-                        if stream.read_exact(&mut header).is_err() {
-                            break;
-                        }
-
-                        let tag = &header[0..4];
-                        let len = u32::from_be_bytes([header[4], header[5], header[6], header[7]]) as usize;
-                        if len == 0 || len > 5_000_000 {
-                            continue;
-                        }
-
-                        if tag == b"CLFR" {
-                            // Trame Vidéo JPEG
-                            let mut jpeg_buf = vec![0u8; len];
-                            if stream.read_exact(&mut jpeg_buf).is_err() {
-                                break;
-                            }
-
-                            if let Ok(img) = image::load_from_memory(&jpeg_buf) {
-                                let rgba = img.to_rgba8();
-                                let size = [rgba.width() as usize, rgba.height() as usize];
-                                let pixels = rgba.into_raw();
-                                let color_img = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
-
-                                *frame_img_clone.lock() = Some(color_img);
-                                state_stream.lock().received_frames += 1;
-                            }
-                        } else if tag == b"CLAU" {
-                            // Paquet Audio PCM
-                            let mut pcm_buf = vec![0u8; len];
-                            if stream.read_exact(&mut pcm_buf).is_err() {
-                                break;
-                            }
-
-                            state_stream.lock().audio_active = true;
-                            let mut samples = Vec::with_capacity(len / 2);
-                            for chunk in pcm_buf.chunks_exact(2) {
-                                let val = i16::from_le_bytes([chunk[0], chunk[1]]);
-                                samples.push(val as f32 / 32768.0);
-                            }
-
-                            let mut q = audio_buf_clone.lock();
-                            if q.len() < 48_000 {
-                                q.extend(samples);
-                            }
-                        }
-                    }
-
-                    state_stream.lock().connected_to_host = false;
-                    *tcp_tx_clone.lock() = None;
                 }
 
-                thread::sleep(Duration::from_millis(1000));
+                let mut header = [0u8; FRAME_HEADER_LEN];
+                let mut window_start = Instant::now();
+                let mut window_bytes: u64 = 0;
+                let mut window_frames: u32 = 0;
+
+                loop {
+                    if !running_conn.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if stream.read_exact(&mut header).is_err() {
+                        break;
+                    }
+                    if header[0..4] != FRAME_MAGIC {
+                        break;
+                    }
+                    let kind = header[4];
+                    let width = u16::from_le_bytes([header[6], header[7]]) as usize;
+                    let height = u16::from_le_bytes([header[8], header[9]]) as usize;
+                    let len = u32::from_le_bytes([header[12], header[13], header[14], header[15]])
+                        as usize;
+                    if len == 0 || len > MAX_FRAME_BYTES {
+                        break;
+                    }
+
+                    let mut payload = vec![0u8; len];
+                    if stream.read_exact(&mut payload).is_err() {
+                        break;
+                    }
+
+                    if kind == FRAME_KIND_VIDEO {
+                        if let Ok(img) = image::load_from_memory(&payload) {
+                            let rgba = img.to_rgba8();
+                            let size = [rgba.width() as usize, rgba.height() as usize];
+                            let (w, h) = (rgba.width(), rgba.height());
+                            let color_img =
+                                egui::ColorImage::from_rgba_unmultiplied(size, &rgba.into_raw());
+                            *frame_clone.lock() = Some(color_img);
+                            let mut st = state_stream.lock();
+                            st.received_frames += 1;
+                            st.width = w;
+                            st.height = h;
+                        }
+                    } else if kind == FRAME_KIND_AUDIO {
+                        let rate = (height as u32) * 1000;
+                        let channels = width.max(1);
+                        sink_clone
+                            .lock()
+                            .push(&payload, rate, channels);
+                        state_stream.lock().audio_active = true;
+                    }
+
+                    window_bytes += (len + FRAME_HEADER_LEN) as u64;
+                    window_frames += 1;
+                    let elapsed = window_start.elapsed();
+                    if elapsed >= Duration::from_millis(500) {
+                        let secs = elapsed.as_secs_f32();
+                        let mut st = state_stream.lock();
+                        st.received_fps = window_frames as f32 / secs;
+                        st.received_kbps = (window_bytes as f32 * 8.0) / secs / 1000.0;
+                        drop(st);
+                        window_bytes = 0;
+                        window_frames = 0;
+                        window_start = Instant::now();
+                    }
+                }
+
+                {
+                    let mut st = state_stream.lock();
+                    st.connected = false;
+                    st.status = "flux interrompu".to_string();
+                    st.received_fps = 0.0;
+                    st.received_kbps = 0.0;
+                }
+                *tx_clone.lock() = None;
+                thread::sleep(Duration::from_millis(500));
             }
         });
 
         Self {
             state,
             frame_image,
+            frame_size: Vec2::new(args.width as f32, args.height as f32),
             texture: None,
             tcp_tx,
             active_keys: Vec::new(),
             last_input_time: Instant::now(),
-            last_mouse_time: Instant::now(),
-            mouse_l_down: false,
-            mouse_r_down: false,
-            last_fps_calc: Instant::now(),
-            frame_count: 0,
+            fullscreen: args.fullscreen,
+            wants_input: args.send_input,
+            player: args.player,
+            mouse_enabled: args.mouse,
+        }
+    }
+
+    fn send_input(&self, line: String) {
+        if let Some(stream) = self.tcp_tx.lock().as_mut() {
+            let _ = stream.write_all(line.as_bytes());
         }
     }
 }
 
 impl eframe::App for ViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Calcul du framerate d'affichage réel
-        self.frame_count += 1;
-        let elapsed_fps = self.last_fps_calc.elapsed();
-        if elapsed_fps >= Duration::from_secs(1) {
-            let actual_fps = (self.frame_count as f32 / elapsed_fps.as_secs_f32()).round();
-            self.state.lock().fps = actual_fps;
-            self.frame_count = 0;
-            self.last_fps_calc = Instant::now();
-        }
-
-        // Récupération de la nouvelle image vidéo si disponible
         if let Some(new_img) = self.frame_image.lock().take() {
-            self.texture = Some(ctx.load_texture("live_stream_frame", new_img, TextureOptions::LINEAR));
-        }
-
-        // Capture continue et complète des touches clavier pour les jeux 3D (ZQSD, Shift, Espace, etc.)
-        let mut pressed_keys = Vec::new();
-        ctx.input(|i| {
-            if i.key_down(Key::Z) || i.key_down(Key::W) { pressed_keys.push("Z"); }
-            if i.key_down(Key::Q) || i.key_down(Key::A) { pressed_keys.push("Q"); }
-            if i.key_down(Key::S) { pressed_keys.push("S"); }
-            if i.key_down(Key::D) { pressed_keys.push("D"); }
-            if i.modifiers.shift { pressed_keys.push("SHIFT"); }
-            if i.modifiers.ctrl { pressed_keys.push("CTRL"); }
-            if i.key_down(Key::Space) { pressed_keys.push("ESPACE"); }
-            if i.key_down(Key::E) { pressed_keys.push("E"); }
-            if i.key_down(Key::F) { pressed_keys.push("F"); }
-            if i.key_down(Key::R) { pressed_keys.push("R"); }
-            if i.key_down(Key::C) { pressed_keys.push("C"); }
-            if i.key_down(Key::Tab) { pressed_keys.push("TAB"); }
-            if i.key_down(Key::Escape) { pressed_keys.push("ECHAP"); }
-            if i.key_down(Key::Num1) { pressed_keys.push("1"); }
-            if i.key_down(Key::Num2) { pressed_keys.push("2"); }
-            if i.key_down(Key::Num3) { pressed_keys.push("3"); }
-            if i.key_down(Key::Num4) { pressed_keys.push("4"); }
-            if i.key_down(Key::ArrowUp) { pressed_keys.push("HAUT"); }
-            if i.key_down(Key::ArrowDown) { pressed_keys.push("BAS"); }
-            if i.key_down(Key::ArrowLeft) { pressed_keys.push("GAUCHE"); }
-            if i.key_down(Key::ArrowRight) { pressed_keys.push("DROITE"); }
-            if i.key_down(Key::Enter) { pressed_keys.push("ENTREE"); }
-        });
-
-        let keys_changed = pressed_keys.iter().map(|s| s.to_string()).collect::<Vec<_>>() != self.active_keys;
-        if keys_changed || (!pressed_keys.is_empty() && self.last_input_time.elapsed() > Duration::from_millis(30)) {
-            self.active_keys = pressed_keys.iter().map(|s| s.to_string()).collect();
-            self.last_input_time = Instant::now();
-
-            let msg = format!("INPUT:SLOT2:{}\n", pressed_keys.join(","));
-            if let Some(ref mut tcp) = *self.tcp_tx.lock() {
-                let _ = tcp.write_all(msg.as_bytes());
-            }
-
-            // Fallback UDP port 47989
-            let host_ip = self.state.lock().host_addr.clone();
-            if let Ok(sock) = UdpSocket::bind("0.0.0.0:0") {
-                let target: SocketAddr = format!("{}:47989", host_ip).parse().unwrap_or_else(|_| "10.244.0.1:47989".parse().unwrap());
-                let _ = sock.send_to(msg.as_bytes(), target);
+            self.frame_size = Vec2::new(new_img.size[0] as f32, new_img.size[1] as f32);
+            match self.texture.as_mut() {
+                // Reuse the GPU texture instead of allocating one per frame.
+                Some(tex) => tex.set(new_img, TextureOptions::LINEAR),
+                None => {
+                    self.texture = Some(ctx.load_texture(
+                        "stream_frame",
+                        new_img,
+                        TextureOptions::LINEAR,
+                    ))
+                }
             }
         }
 
-        // Capture de la souris (Déplacement caméra 3D + Clic gauche/droit)
-        let mut mouse_msg = None;
-        ctx.input(|i| {
-            let delta = i.pointer.delta();
-            let l_down = i.pointer.primary_down();
-            let r_down = i.pointer.secondary_down();
-
-            let has_movement = delta.length() > 0.05;
-            let buttons_changed = l_down != self.mouse_l_down || r_down != self.mouse_r_down;
-
-            if has_movement || buttons_changed || (self.last_mouse_time.elapsed() > Duration::from_millis(40) && (l_down || r_down)) {
-                let dx = (delta.x * 1.5).round() as i32;
-                let dy = (delta.y * 1.5).round() as i32;
-                let l_val = if l_down { "1" } else { "0" };
-                let r_val = if r_down { "1" } else { "0" };
-
-                mouse_msg = Some(format!("MOUSE:{}:{}:{}:{}\n", dx, dy, l_val, r_val));
-                self.mouse_l_down = l_down;
-                self.mouse_r_down = r_down;
-                self.last_mouse_time = Instant::now();
+        if self.wants_input {
+            let mut keys: Vec<u16> = Vec::new();
+            ctx.input(|i| {
+                if i.modifiers.shift {
+                    keys.push(0x10);
+                }
+                if i.modifiers.ctrl {
+                    keys.push(0x11);
+                }
+                if i.modifiers.alt {
+                    keys.push(0x12);
+                }
+                for (key, vk) in KEY_MAP {
+                    if i.key_down(*key) {
+                        keys.push(*vk);
+                    }
+                }
+            });
+            keys.sort_unstable();
+            keys.dedup();
+            if self.player == 2 {
+                for vk in keys.iter_mut() {
+                    *vk = translate_player2(*vk);
+                }
+                keys.sort_unstable();
+                keys.dedup();
             }
-        });
 
-        if let Some(msg) = mouse_msg {
-            if let Some(ref mut tcp) = *self.tcp_tx.lock() {
-                let _ = tcp.write_all(msg.as_bytes());
+            let changed = keys != self.active_keys;
+            let heartbeat = self.last_input_time.elapsed() > Duration::from_millis(50);
+            if changed || (heartbeat && !keys.is_empty()) {
+                self.active_keys = keys.clone();
+                self.last_input_time = Instant::now();
+                let payload: Vec<String> = keys.iter().map(|vk| format!("{:X}", vk)).collect();
+                // Full state every time: a lost packet can never leave a key stuck.
+                self.send_input(format!("K {}\n", payload.join(",")));
+            } else if heartbeat {
+                self.last_input_time = Instant::now();
+                self.send_input("K \n".to_string());
+            }
+
+            let (delta, buttons) = ctx.input(|i| {
+                let mut mask = 0u8;
+                if i.pointer.primary_down() {
+                    mask |= 1;
+                }
+                if i.pointer.secondary_down() {
+                    mask |= 2;
+                }
+                (i.pointer.delta(), mask)
+            });
+            if self.mouse_enabled && (delta.length() > 0.05 || buttons != 0) {
+                self.send_input(format!(
+                    "M {} {} {}\n",
+                    delta.x.round() as i32,
+                    delta.y.round() as i32,
+                    buttons
+                ));
             }
         }
+
+        egui::TopBottomPanel::top("hud")
+            .frame(egui::Frame::none().fill(COLOR_CARD).inner_margin(egui::Margin::symmetric(14.0, 8.0)))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let st = self.state.lock();
+                    let dot = if st.connected { COLOR_ACCENT } else { Color32::from_rgb(255, 170, 0) };
+                    ui.painter()
+                        .circle_filled(ui.cursor().min + Vec2::new(8.0, 10.0), 5.0, dot);
+                    ui.add_space(18.0);
+                    ui.label(RichText::new("CoopLink").color(Color32::WHITE).strong());
+                    ui.label(RichText::new(format!("· {}", st.game_title)).color(COLOR_ACCENT));
+                    ui.label(RichText::new(format!("· {}", st.host_addr)).color(COLOR_MUTED).small());
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(format!(
+                                "{:.1} Mbps · {:.0} fps · {}x{} · {}",
+                                st.received_kbps / 1000.0,
+                                st.received_fps,
+                                st.width,
+                                st.height,
+                                st.status
+                            ))
+                            .color(COLOR_BLUE)
+                            .monospace()
+                            .strong(),
+                        );
+                        if st.audio_active {
+                            ui.label(RichText::new("son").color(COLOR_ACCENT).small());
+                        }
+                    });
+                });
+            });
 
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(COLOR_BG))
             .show(ctx, |ui| {
-                // Barre d'en-tête streaming
-                egui::Frame::none()
-                    .fill(COLOR_CARD)
-                    .inner_margin(egui::Margin::symmetric(14.0, 8.0))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let st = self.state.lock();
-                            let is_connected = st.connected_to_host && self.texture.is_some();
-                            let dot_color = if is_connected { COLOR_ACCENT } else { Color32::from_rgb(255, 170, 0) };
-
-                            ui.painter().circle_filled(ui.cursor().min + Vec2::new(8.0, 10.0), 5.0, dot_color);
-                            ui.add_space(18.0);
-                            ui.label(RichText::new("CoopLink Stream Viewer").color(Color32::WHITE).strong());
-                            ui.add_space(10.0);
-                            ui.label(RichText::new(format!("Jeu : {}", st.game_title)).color(COLOR_ACCENT).strong());
-                            ui.add_space(10.0);
-                            ui.label(RichText::new(format!("Hôte : {}", st.host_addr)).color(Color32::from_rgb(148, 163, 184)));
-
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(RichText::new(format!("Latence : {:.1} ms", st.latency_ms)).color(COLOR_ACCENT).monospace().strong());
-                                ui.add_space(10.0);
-                                if st.audio_active {
-                                    ui.label(RichText::new("Son Stéréo 48 kHz Actif").color(COLOR_ACCENT).small());
-                                    ui.add_space(8.0);
-                                }
-                                ui.label(RichText::new(format!("{:.0} FPS — 1080p Haute Fidélité", st.fps)).color(COLOR_BLUE).strong());
-                            });
-                        });
-                    });
-
-                // Zone de flux vidéo en direct (ou écran d'attente)
-                let available = ui.available_size();
-                let rect = Rect::from_min_size(ui.cursor().min + Vec2::new(10.0, 10.0), available - Vec2::new(20.0, 48.0));
+                let rect = ui.available_rect_before_wrap();
                 let painter = ui.painter();
-
-                painter.rect_filled(rect, Rounding::same(10.0), Color32::from_rgb(15, 23, 42));
+                painter.rect_filled(rect, Rounding::same(0.0), Color32::from_rgb(6, 10, 20));
 
                 if let Some(ref tex) = self.texture {
-                    // Affichage plein cadre haute résolution
+                    // Letterbox: keep the source aspect ratio, never stretch the image.
+                    let src = self.frame_size;
+                    let scale = (rect.width() / src.x).min(rect.height() / src.y);
+                    let size = Vec2::new(src.x * scale, src.y * scale);
+                    let target = Rect::from_center_size(rect.center(), size);
                     painter.image(
                         tex.id(),
-                        rect,
+                        target,
                         Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
                         Color32::WHITE,
                     );
                 } else {
-                    // Écran d'attente de connexion au flux
-                    painter.rect_stroke(rect, Rounding::same(10.0), Stroke::new(1.5_f32, Color32::from_rgb(30, 41, 59)));
-                    let center = rect.center();
                     painter.text(
-                        center - Vec2::new(0.0, 20.0),
+                        rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        "CONNEXION AU FLUX DU JEU EN COURS...",
+                        "En attente du flux de l'hôte...",
                         FontId::proportional(20.0),
                         Color32::WHITE,
                     );
-                    painter.text(
-                        center + Vec2::new(0.0, 15.0),
-                        egui::Align2::CENTER_CENTER,
-                        "Démarrage automatique de la capture d'écran du PC Hôte...",
-                        FontId::proportional(14.0),
-                        Color32::from_rgb(148, 163, 184),
-                    );
                 }
 
-                // Touches actives en surimpression
                 if !self.active_keys.is_empty() {
-                    let overlay_pos = Pos2::new(rect.min.x + 16.0, rect.max.y - 36.0);
+                    let labels: Vec<String> =
+                        self.active_keys.iter().map(|vk| format!("{:X}", vk)).collect();
+                    let pos = Pos2::new(rect.min.x + 16.0, rect.max.y - 36.0);
                     painter.rect_filled(
-                        Rect::from_min_size(overlay_pos, Vec2::new(320.0, 26.0)),
+                        Rect::from_min_size(pos, Vec2::new(240.0, 26.0)),
                         Rounding::same(6.0),
-                        Color32::from_black_alpha(180),
+                        Color32::from_black_alpha(160),
                     );
                     painter.text(
-                        overlay_pos + Vec2::new(10.0, 13.0),
+                        pos + Vec2::new(10.0, 13.0),
                         egui::Align2::LEFT_CENTER,
-                        format!("Commandes : {}", self.active_keys.join(" + ")),
-                        FontId::proportional(13.0),
+                        labels.join(" + "),
+                        FontId::proportional(12.0),
                         COLOR_ACCENT,
                     );
                 }
 
-                // Barre d'aide inférieure
+                // Keep the surface clickable so mouse input reaches the host.
                 ui.allocate_rect(rect, egui::Sense::click_and_drag());
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Contrôles : ZQSD/WASD pour marcher, Shift pour courir, Espace pour sauter, Souris pour viser/tirer, E/F interaction, C accroupi.").color(Color32::from_rgb(148, 163, 184)).size(12.0));
-                });
             });
 
-        ctx.request_repaint_after(Duration::from_millis(16)); // 60 FPS
+        ctx.request_repaint_after(Duration::from_millis(8));
     }
 }
 
 fn main() -> eframe::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    let host_ip = if args.len() > 2 { args[2].clone() } else { "10.244.0.1".to_string() };
-    let game = if args.len() > 3 { args[3].clone() } else { "Jeu au Premier Plan".to_string() };
+    let args = parse_args();
 
-    let vp = egui::ViewportBuilder::default()
-        .with_title(format!("CoopLink Stream Viewer - {} (60/120 FPS + Audio)", game))
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title(format!("CoopLink — {}", args.title))
         .with_inner_size([1280.0, 750.0])
-        .with_min_inner_size([800.0, 500.0]);
+        .with_min_inner_size([640.0, 400.0]);
 
+    if args.fullscreen {
+        viewport = viewport.with_fullscreen(true);
+    }
+
+    let app_args = args.clone();
     eframe::run_native(
-        "CoopLink Stream Viewer",
+        "CoopLink Viewer",
         eframe::NativeOptions {
-            viewport: vp,
+            viewport,
             ..Default::default()
         },
-        Box::new(move |_cc| Ok(Box::new(ViewerApp::new(host_ip, game)))),
+        Box::new(move |_cc| Ok(Box::new(ViewerApp::new(app_args)))),
     )
 }

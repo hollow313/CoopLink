@@ -1,636 +1,1488 @@
-// CoopLink Capture & Streaming Service Daemon
-// Real-time Screen & Game Capture + Audio Streaming + Input Injection
+// CoopLink Capture & Stream Service
+// Game-window capture, intra-frame encoding, audio loopback and remote input injection.
 // Copyright (c) 2026 Loic HUON. All Rights Reserved.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::collections::HashSet;
+#[path = "../streaming/settings.rs"]
+mod stream_settings;
+
+use parking_lot::Mutex;
+use std::collections::{HashSet, VecDeque};
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
-use parking_lot::Mutex;
+use stream_settings::{
+    FpsLadder, RateControl, RateController, StreamSettings, StreamStats, FRAME_HEADER_LEN,
+    FRAME_KIND_AUDIO, FRAME_KIND_VIDEO, FRAME_MAGIC, MAX_FRAME_BYTES,
+};
 use tracing::{error, info, warn};
 
-// Win32 Input Injection (Clavier & Souris)
-#[cfg(windows)]
-fn send_vk(vk: u16, key_up: bool) {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-    };
-    let flags = if key_up { KEYEVENTF_KEYUP } else { 0 };
-    let input = INPUT {
-        r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 {
-            ki: KEYBDINPUT {
-                wVk: vk,
-                wScan: 0,
-                dwFlags: flags,
-                time: 0,
-                dwExtraInfo: 0,
-            },
-        },
-    };
-    unsafe {
-        SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
-    }
+// ---------------------------------------------------------------------------
+// Shared state
+// ---------------------------------------------------------------------------
+
+/// One captured screen frame, already converted to RGB8.
+struct VideoFrame {
+    rgb: Vec<u8>,
+    width: u32,
+    height: u32,
 }
 
-#[cfg(windows)]
-fn send_mouse_input(dx: i32, dy: i32, left_down: bool, right_down: bool, prev_l: bool, prev_r: bool) {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        mouse_event, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
-        MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
-    };
-    unsafe {
-        let mut flags = 0u32;
-        if dx != 0 || dy != 0 {
-            flags |= MOUSEEVENTF_MOVE;
-        }
-        if left_down && !prev_l {
-            flags |= MOUSEEVENTF_LEFTDOWN;
-        } else if !left_down && prev_l {
-            flags |= MOUSEEVENTF_LEFTUP;
-        }
-        if right_down && !prev_r {
-            flags |= MOUSEEVENTF_RIGHTDOWN;
-        } else if !right_down && prev_r {
-            flags |= MOUSEEVENTF_RIGHTUP;
-        }
-        if flags != 0 {
-            mouse_event(flags, dx, dy, 0, 0);
-        }
-    }
+/// Latest frame, written once by the capture thread and read by every client.
+struct FrameSlot {
+    inner: Mutex<Option<(u64, Arc<VideoFrame>)>>,
 }
 
-fn map_key_to_vk(k: &str) -> Option<u16> {
-    match k.trim().to_uppercase().as_str() {
-        "Z" | "W" => Some(0x5A), // VK_Z
-        "Q" | "A" => Some(0x51), // VK_Q
-        "S" => Some(0x53),       // VK_S
-        "D" => Some(0x44),       // VK_D
-        "E" => Some(0x45),       // VK_E (Interact)
-        "F" => Some(0x46),       // VK_F (Action Cyberpunk)
-        "R" => Some(0x52),       // VK_R (Recharger)
-        "C" => Some(0x43),       // VK_C (Accroupi)
-        "X" => Some(0x58),       // VK_X
-        "V" => Some(0x56),       // VK_V
-        "SHIFT" => Some(0x10),   // VK_SHIFT (Sprint)
-        "CTRL" => Some(0x11),    // VK_CONTROL (S'accroupir)
-        "TAB" => Some(0x09),     // VK_TAB (Scanner Cyberpunk)
-        "ECHAP" | "ESC" => Some(0x1B), // VK_ESCAPE
-        "1" => Some(0x31),       // Arme 1
-        "2" => Some(0x32),       // Arme 2
-        "3" => Some(0x33),       // Arme 3
-        "4" => Some(0x34),       // Arme 4
-        "HAUT" | "UP" => Some(0x26),    // VK_UP
-        "BAS" | "DOWN" => Some(0x28),   // VK_DOWN
-        "GAUCHE" | "LEFT" => Some(0x25),// VK_LEFT
-        "DROITE" | "RIGHT" => Some(0x27), // VK_RIGHT
-        "ESPACE" | "SPACE" => Some(0x20), // VK_SPACE
-        "ENTREE" | "ENTER" => Some(0x0D), // VK_RETURN
-        _ => None,
-    }
-}
-
-// Gestionnaire d'état des entrées utilisateur pour maintenir les touches enfoncées (ZQSD)
-struct InputState {
-    held_keys: HashSet<u16>,
-    mouse_l: bool,
-    mouse_r: bool,
-    last_packet: Instant,
-}
-
-impl InputState {
+impl FrameSlot {
     fn new() -> Self {
         Self {
-            held_keys: HashSet::new(),
-            mouse_l: false,
-            mouse_r: false,
-            last_packet: Instant::now(),
+            inner: Mutex::new(None),
         }
     }
 
-    #[cfg(windows)]
-    fn update_keys(&mut self, new_keys: &[u16]) {
-        self.last_packet = Instant::now();
-        let new_set: HashSet<u16> = new_keys.iter().copied().collect();
-
-        // Enfoncer les nouvelles touches
-        for &vk in &new_set {
-            if !self.held_keys.contains(&vk) {
-                send_vk(vk, false); // KEY DOWN
-            }
-        }
-
-        // Relâcher les touches qui ne sont plus actives
-        for &vk in &self.held_keys {
-            if !new_set.contains(&vk) {
-                send_vk(vk, true); // KEY UP
-            }
-        }
-
-        self.held_keys = new_set;
+    fn publish(&self, seq: u64, frame: VideoFrame) {
+        *self.inner.lock() = Some((seq, Arc::new(frame)));
     }
 
-    #[cfg(not(windows))]
-    fn update_keys(&mut self, _new_keys: &[u16]) {}
-
-    #[cfg(windows)]
-    fn release_all(&mut self) {
-        for &vk in &self.held_keys {
-            send_vk(vk, true);
-        }
-        self.held_keys.clear();
-        if self.mouse_l {
-            send_mouse_input(0, 0, false, self.mouse_r, true, self.mouse_r);
-            self.mouse_l = false;
-        }
-        if self.mouse_r {
-            send_mouse_input(0, 0, self.mouse_l, false, self.mouse_l, true);
-            self.mouse_r = false;
+    fn latest_after(&self, last_seq: u64) -> Option<(u64, Arc<VideoFrame>)> {
+        let guard = self.inner.lock();
+        match guard.as_ref() {
+            Some((seq, frame)) if *seq > last_seq => Some((*seq, frame.clone())),
+            _ => None,
         }
     }
-
-    #[cfg(not(windows))]
-    fn release_all(&mut self) {}
 }
 
-// Recherche et focalisation automatique de la fenêtre du jeu cible
+/// PCM chunks broadcast to every connected client.
+struct AudioBus {
+    chunks: Mutex<VecDeque<(u64, Arc<Vec<u8>>)>>,
+    next_id: AtomicU64,
+    sample_rate: AtomicU32,
+    channels: AtomicU8,
+}
+
+impl AudioBus {
+    fn new() -> Self {
+        Self {
+            chunks: Mutex::new(VecDeque::new()),
+            next_id: AtomicU64::new(1),
+            sample_rate: AtomicU32::new(48_000),
+            channels: AtomicU8::new(2),
+        }
+    }
+
+    fn push(&self, pcm: Vec<u8>, sample_rate: u32, channels: u8) {
+        if pcm.is_empty() {
+            return;
+        }
+        self.sample_rate.store(sample_rate, Ordering::Relaxed);
+        self.channels.store(channels, Ordering::Relaxed);
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let mut q = self.chunks.lock();
+        q.push_back((id, Arc::new(pcm)));
+        while q.len() > 150 {
+            q.pop_front();
+        }
+    }
+
+    /// Chunks newer than `cursor`; what the reader missed is dropped, not queued.
+    fn take_since(&self, cursor: &mut u64) -> (Vec<Arc<Vec<u8>>>, u32, u8) {
+        let rate = self.sample_rate.load(Ordering::Relaxed);
+        let channels = self.channels.load(Ordering::Relaxed);
+        let q = self.chunks.lock();
+        let mut out = Vec::new();
+        for (id, chunk) in q.iter() {
+            if *id > *cursor {
+                out.push(chunk.clone());
+                *cursor = *id;
+            }
+        }
+        (out, rate, channels)
+    }
+}
+
+/// Counters shared between the client threads and the status publisher.
+#[derive(Default)]
+struct LiveStats {
+    frames_sent: AtomicU64,
+    bytes_sent: AtomicU64,
+    dropped: AtomicU64,
+    quality: AtomicU8,
+    fps: AtomicU32,
+    width: AtomicU32,
+    height: AtomicU32,
+    clients: AtomicU32,
+    audio_ok: AtomicBool,
+    audio_error: Mutex<String>,
+    audio_device_name: Mutex<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Windows engine
+// ---------------------------------------------------------------------------
+
 #[cfg(windows)]
-fn find_and_focus_window(target_hint: &str) -> (i32, i32, i32, i32) {
-    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+mod engine {
+    use super::*;
+    use std::ffi::c_void;
+    use windows_sys::Win32::Foundation::{CloseHandle, BOOL, HANDLE, HWND, LPARAM, POINT, RECT};
+    use windows_sys::Win32::Graphics::Gdi::{
+        BitBlt, ClientToScreen, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
+        GetDC, GetDIBits, ReleaseDC, SelectObject, SetStretchBltMode, StretchBlt, BITMAPINFO,
+        BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HALFTONE, SRCCOPY,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
+        KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MOUSEEVENTF_LEFTDOWN,
+        MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
+        MOUSEINPUT,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetForegroundWindow, GetSystemMetrics, GetWindowRect, GetWindowTextW,
+        EnumWindows, GetClassNameW, GetClientRect, GetForegroundWindow,
+        GetSystemMetrics, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
         IsWindowVisible, SetForegroundWindow, ShowWindow, SM_CXSCREEN, SM_CYSCREEN, SW_RESTORE,
     };
 
-    let screen_w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
-    let screen_h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
-    let default_rect = (0, 0, screen_w, screen_h);
-
-    if target_hint.is_empty() || target_hint.starts_with("CoopLink") {
-        return default_rect;
+    #[derive(Debug, Clone)]
+    pub struct WindowRef {
+        /// Raw `HWND`. Kept as `isize` so the struct stays `Send` across threads.
+        pub hwnd: isize,
+        pub pid: u32,
+        pub title: String,
+        pub class: String,
+        pub process: String,
     }
 
-    struct SearchCtx {
-        target: String,
-        found_hwnd: HWND,
+    /// What the service is currently capturing.
+    pub enum CaptureTarget {
+        Window(WindowRef),
+        Desktop,
+        None,
+    }
+
+    const SHELL_CLASSES: [&str; 6] = [
+        "Progman",
+        "WorkerW",
+        "Shell_TrayWnd",
+        "Shell_SecondaryTrayWnd",
+        "Windows.UI.Core.CoreWindow",
+        "ApplicationFrameWindow",
+    ];
+
+    pub fn own_pid() -> u32 {
+        std::process::id()
     }
 
     unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        let ctx = &mut *(lparam as *mut SearchCtx);
-        if IsWindowVisible(hwnd) == 0 {
+        let out = &mut *(lparam as *mut Vec<WindowRef>);
+        if IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 {
             return 1;
         }
-        let mut title_buf = [0u16; 512];
-        let len = GetWindowTextW(hwnd, title_buf.as_mut_ptr(), 512);
-        if len > 0 {
-            let title = String::from_utf16_lossy(&title_buf[..len as usize]);
-            let title_lower = title.to_lowercase();
-            let target_lower = ctx.target.to_lowercase();
 
-            // Ignore les utilitaires système et fenêtres invisibles
-            if !title_lower.contains("cooplink")
-                && (title_lower.contains(&target_lower)
-                    || (target_lower.contains("cyberpunk") && title_lower.contains("cyberpunk")))
-            {
-                ctx.found_hwnd = hwnd;
-                return 0; // Trouvé, arrêt de l'énumération
-            }
+        let mut class_buf = [0u16; 256];
+        let class_len = GetClassNameW(hwnd, class_buf.as_mut_ptr(), class_buf.len() as i32);
+        let class = String::from_utf16_lossy(&class_buf[..class_len.max(0) as usize]);
+        if SHELL_CLASSES.iter().any(|c| c.eq_ignore_ascii_case(&class)) {
+            return 1;
         }
+
+        let mut title_buf = [0u16; 512];
+        let title_len = GetWindowTextW(hwnd, title_buf.as_mut_ptr(), title_buf.len() as i32);
+        let title = String::from_utf16_lossy(&title_buf[..title_len.max(0) as usize]);
+        if title.trim().is_empty() {
+            return 1;
+        }
+
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 {
+            return 1;
+        }
+
+        out.push(WindowRef {
+            hwnd: hwnd as isize,
+            pid,
+            title,
+            class,
+            process: process_image_name(pid),
+        });
         1
     }
 
-    let clean_target = if target_hint.contains(" : ") {
-        target_hint.split(" : ").nth(1).unwrap_or(target_hint)
-    } else {
-        target_hint
-    };
+    /// `Game.exe` for a pid (empty when the process cannot be queried).
+    pub fn process_image_name(pid: u32) -> String {
+        unsafe {
+            let handle: HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle == 0 {
+                return String::new();
+            }
+            let mut buf = [0u16; 1024];
+            let mut size = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut size);
+            CloseHandle(handle);
+            if ok == 0 {
+                return String::new();
+            }
+            let full = String::from_utf16_lossy(&buf[..size as usize]);
+            full.rsplit(['\\', '/']).next().unwrap_or("").to_string()
+        }
+    }
 
-    let mut ctx = SearchCtx {
-        target: clean_target.to_string(),
-        found_hwnd: 0,
-    };
+    pub fn list_windows() -> Vec<WindowRef> {
+        let mut found: Vec<WindowRef> = Vec::new();
+        unsafe {
+            EnumWindows(Some(enum_proc), &mut found as *mut _ as LPARAM);
+        }
+        found
+    }
 
-    unsafe {
-        EnumWindows(Some(enum_proc), &mut ctx as *mut _ as LPARAM);
-        let target_hwnd = if ctx.found_hwnd != 0 {
-            ctx.found_hwnd
-        } else {
-            GetForegroundWindow()
-        };
+    pub fn foreground_window() -> Option<WindowRef> {
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd == 0 {
+                return None;
+            }
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            let mut title_buf = [0u16; 512];
+            let len = GetWindowTextW(hwnd, title_buf.as_mut_ptr(), title_buf.len() as i32);
+            let title = String::from_utf16_lossy(&title_buf[..len.max(0) as usize]);
+            let mut class_buf = [0u16; 256];
+            let clen = GetClassNameW(hwnd, class_buf.as_mut_ptr(), class_buf.len() as i32);
+            let class = String::from_utf16_lossy(&class_buf[..clen.max(0) as usize]);
+            Some(WindowRef {
+                hwnd: hwnd as isize,
+                pid,
+                title,
+                class,
+                process: process_image_name(pid),
+            })
+        }
+    }
 
-        if target_hwnd != 0 {
-            ShowWindow(target_hwnd, SW_RESTORE);
-            SetForegroundWindow(target_hwnd);
+    fn is_usable(window: &WindowRef) -> bool {
+        !window.process.is_empty()
+            && !window.process.eq_ignore_ascii_case("cooplink.exe")
+            && window.pid != own_pid()
+            && !window.class.eq_ignore_ascii_case("CoopLink")
+    }
 
-            let mut r: RECT = std::mem::zeroed();
-            if GetWindowRect(target_hwnd, &mut r) != 0 {
-                let w = r.right - r.left;
-                let h = r.bottom - r.top;
-                if w > 200 && h > 200 {
-                    return (r.left.max(0), r.top.max(0), w, h);
-                }
+    /// Pick the window to capture.
+    ///
+    /// Order: explicit process name, title fragment, foreground window, largest
+    /// visible window. Shell windows and CoopLink itself are never returned, and
+    /// the whole desktop is only used when explicitly allowed.
+    pub fn resolve_target(settings: &StreamSettings, sticky: Option<&WindowRef>) -> CaptureTarget {
+        let windows = list_windows();
+
+        if !settings.target_process.trim().is_empty() {
+            let wanted = settings.target_process.trim().to_ascii_lowercase();
+            if let Some(w) = windows
+                .iter()
+                .find(|w| w.process.to_ascii_lowercase() == wanted)
+            {
+                return CaptureTarget::Window(w.clone());
             }
         }
+
+        if !settings.target_title.trim().is_empty() {
+            let wanted = settings.target_title.trim().to_ascii_lowercase();
+            if let Some(w) = windows
+                .iter()
+                .find(|w| w.title.to_ascii_lowercase().contains(&wanted) && is_usable(w))
+            {
+                return CaptureTarget::Window(w.clone());
+            }
+        }
+
+        // Follow the foreground game, but keep the previous game selected while
+        // the host is clicking around inside CoopLink.
+        if let Some(fg) = foreground_window() {
+            if is_usable(&fg) {
+                return CaptureTarget::Window(fg);
+            }
+        }
+
+        if let Some(prev) = sticky {
+            if windows.iter().any(|w| w.hwnd == prev.hwnd && is_usable(w)) {
+                return CaptureTarget::Window(prev.clone());
+            }
+        }
+
+        let candidate = windows
+            .iter()
+            .filter(|w| is_usable(w))
+            .max_by_key(|w| source_size_of(w.hwnd as HWND).map(|(a, b)| a * b).unwrap_or(0));
+
+        if let Some(w) = candidate {
+            return CaptureTarget::Window(w.clone());
+        }
+
+        if settings.allow_desktop_fallback {
+            CaptureTarget::Desktop
+        } else {
+            CaptureTarget::None
+        }
     }
 
-    default_rect
+    /// Client area of a window: `(screen_x, screen_y, width, height)`.
+    fn client_geometry(hwnd: HWND) -> Option<(i32, i32, u32, u32)> {
+        unsafe {
+            let mut rc: RECT = std::mem::zeroed();
+            if GetClientRect(hwnd, &mut rc) == 0 {
+                return None;
+            }
+            let width = (rc.right - rc.left).max(0) as u32;
+            let height = (rc.bottom - rc.top).max(0) as u32;
+            if width < 16 || height < 16 {
+                return None;
+            }
+            let mut origin = POINT { x: 0, y: 0 };
+            if ClientToScreen(hwnd, &mut origin) == 0 {
+                return None;
+            }
+            Some((origin.x, origin.y, width, height))
+        }
+    }
+
+    fn source_size_of(hwnd: HWND) -> Option<(u32, u32)> {
+        client_geometry(hwnd).map(|(_, _, w, h)| (w, h))
+    }
+
+    /// Native size of the captured surface.
+    pub fn source_size(target: &CaptureTarget) -> Option<(u32, u32)> {
+        match target {
+            CaptureTarget::Window(w) => source_size_of(w.hwnd as HWND),
+            CaptureTarget::Desktop => unsafe {
+                Some((
+                    GetSystemMetrics(SM_CXSCREEN) as u32,
+                    GetSystemMetrics(SM_CYSCREEN) as u32,
+                ))
+            },
+            CaptureTarget::None => None,
+        }
+    }
+
+    /// `(title, process, message)` for the status file and the UI.
+    pub fn describe(target: &CaptureTarget) -> (String, String, String) {
+        match target {
+            CaptureTarget::Window(w) => (
+                w.title.clone(),
+                w.process.clone(),
+                "capture active".to_string(),
+            ),
+            CaptureTarget::Desktop => (
+                "Écran complet".to_string(),
+                String::new(),
+                "aucune fenêtre ciblée".to_string(),
+            ),
+            CaptureTarget::None => (
+                String::new(),
+                String::new(),
+                "en attente d'une fenêtre de jeu".to_string(),
+            ),
+        }
+    }
+
+    /// Grab `out_w x out_h` pixels from the target (1:1 when the sizes match).
+    pub fn grab(target: &CaptureTarget, out_w: u32, out_h: u32) -> Option<(Vec<u8>, u32, u32)> {
+        let (src_x, src_y, src_w, src_h) = match target {
+            CaptureTarget::Window(w) => client_geometry(w.hwnd as HWND)?,
+            CaptureTarget::Desktop => unsafe {
+                (
+                    0,
+                    0,
+                    GetSystemMetrics(SM_CXSCREEN) as u32,
+                    GetSystemMetrics(SM_CYSCREEN) as u32,
+                )
+            },
+            CaptureTarget::None => return None,
+        };
+        if src_w < 16 || src_h < 16 {
+            return None;
+        }
+
+        unsafe {
+            let screen_dc = GetDC(0);
+            if screen_dc == 0 {
+                return None;
+            }
+            let mem_dc = CreateCompatibleDC(screen_dc);
+            if mem_dc == 0 {
+                ReleaseDC(0, screen_dc);
+                return None;
+            }
+            let bitmap = CreateCompatibleBitmap(screen_dc, out_w as i32, out_h as i32);
+            if bitmap == 0 {
+                DeleteDC(mem_dc);
+                ReleaseDC(0, screen_dc);
+                return None;
+            }
+            let previous = SelectObject(mem_dc, bitmap);
+
+            let copied = if src_w == out_w && src_h == out_h {
+                // 1:1 copy: no resampling, no aliasing, sharpest possible capture.
+                BitBlt(
+                    mem_dc,
+                    0,
+                    0,
+                    out_w as i32,
+                    out_h as i32,
+                    screen_dc,
+                    src_x,
+                    src_y,
+                    SRCCOPY,
+                )
+            } else {
+                // Only when the requested size differs from the source size.
+                SetStretchBltMode(mem_dc, HALFTONE);
+                StretchBlt(
+                    mem_dc,
+                    0,
+                    0,
+                    out_w as i32,
+                    out_h as i32,
+                    screen_dc,
+                    src_x,
+                    src_y,
+                    src_w as i32,
+                    src_h as i32,
+                    SRCCOPY,
+                )
+            };
+
+            let mut info: BITMAPINFO = std::mem::zeroed();
+            info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+            info.bmiHeader.biWidth = out_w as i32;
+            info.bmiHeader.biHeight = -(out_h as i32); // top-down
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32;
+            info.bmiHeader.biCompression = BI_RGB;
+
+            let mut bgra = vec![0u8; (out_w * out_h * 4) as usize];
+            let lines = GetDIBits(
+                mem_dc,
+                bitmap,
+                0,
+                out_h,
+                bgra.as_mut_ptr() as *mut c_void,
+                &mut info,
+                DIB_RGB_COLORS,
+            );
+
+            SelectObject(mem_dc, previous);
+            DeleteObject(bitmap);
+            DeleteDC(mem_dc);
+            ReleaseDC(0, screen_dc);
+
+            if copied == 0 || lines == 0 {
+                return None;
+            }
+
+            let pixels = (out_w * out_h) as usize;
+            let mut rgb = vec![0u8; pixels * 3];
+            for (i, chunk) in bgra.chunks_exact(4).enumerate() {
+                let dst = i * 3;
+                rgb[dst] = chunk[2];
+                rgb[dst + 1] = chunk[1];
+                rgb[dst + 2] = chunk[0];
+            }
+
+            Some((rgb, out_w, out_h))
+        }
+    }
+
+    fn is_extended_key(vk: u16) -> bool {
+        matches!(
+            vk,
+            0x21..=0x28 | 0x2C | 0x2D | 0x2E | 0x6F | 0x90 | 0xA3 | 0xA5
+        )
+    }
+
+    /// Press or release a key by scan code (works with DirectInput / Raw Input games).
+    pub fn inject_key(vk: u16, down: bool) {
+        let scan = unsafe { MapVirtualKeyW(vk as u32, 0) } as u16;
+        let mut flags = KEYEVENTF_SCANCODE;
+        if !down {
+            flags |= KEYEVENTF_KEYUP;
+        }
+        if is_extended_key(vk) {
+            flags |= KEYEVENTF_EXTENDEDKEY;
+        }
+        let input = INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: scan,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        unsafe {
+            SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+        }
+    }
+
+    /// Relative mouse motion plus the pressed-button state.
+    pub fn inject_mouse(dx: i32, dy: i32, buttons: u8) {
+        let mut flags: u32 = MOUSEEVENTF_MOVE;
+        if buttons & 1 != 0 {
+            flags |= MOUSEEVENTF_LEFTDOWN;
+        }
+        if buttons & 2 != 0 {
+            flags |= MOUSEEVENTF_RIGHTDOWN;
+        }
+        let input = INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx,
+                    dy,
+                    mouseData: 0,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        unsafe {
+            SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+        }
+    }
+
+    pub fn inject_mouse_buttons(held_left: bool, held_right: bool, want_left: bool, want_right: bool) {
+        let mut flags: u32 = 0;
+        if want_left && !held_left {
+            flags |= MOUSEEVENTF_LEFTDOWN;
+        }
+        if !want_left && held_left {
+            flags |= MOUSEEVENTF_LEFTUP;
+        }
+        if want_right && !held_right {
+            flags |= MOUSEEVENTF_RIGHTDOWN;
+        }
+        if !want_right && held_right {
+            flags |= MOUSEEVENTF_RIGHTUP;
+        }
+        if flags == 0 {
+            return;
+        }
+        let input = INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx: 0,
+                    dy: 0,
+                    mouseData: 0,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        unsafe {
+            SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+        }
+    }
+
+    pub fn release_mouse() {
+        inject_mouse_buttons(true, true, false, false);
+    }
+
+    /// Bring the captured game back to the foreground before injecting input.
+    pub fn ensure_foreground(target: &CaptureTarget) {
+        let hwnd = match target {
+            CaptureTarget::Window(w) => w.hwnd as HWND,
+            _ => return,
+        };
+        unsafe {
+            if GetForegroundWindow() == hwnd {
+                return;
+            }
+            ShowWindow(hwnd, SW_RESTORE);
+            SetForegroundWindow(hwnd);
+        }
+    }
+
+    pub fn window_alive(target: &CaptureTarget) -> bool {
+        match target {
+            CaptureTarget::Window(w) => unsafe { IsWindow(w.hwnd as HWND) != 0 },
+            CaptureTarget::Desktop => true,
+            CaptureTarget::None => false,
+        }
+    }
 }
 
 #[cfg(not(windows))]
-fn find_and_focus_window(_target_hint: &str) -> (i32, i32, i32, i32) {
-    (0, 0, 1920, 1080)
-}
+mod engine {
+    use super::*;
 
-#[cfg(windows)]
-fn capture_screen_rgb(crop_x: i32, crop_y: i32, crop_w: i32, crop_h: i32, out_w: i32, out_h: i32) -> Option<Vec<u8>> {
-    use windows_sys::Win32::Graphics::Gdi::{
-        CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
-        GetDIBits, ReleaseDC, SelectObject, SetStretchBltMode, StretchBlt, BITMAPINFO,
-        BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
-    };
+    #[derive(Debug, Clone)]
+    pub struct WindowRef {
+        pub pid: u32,
+        pub title: String,
+        pub class: String,
+        pub process: String,
+    }
 
-    unsafe {
-        let hdc_screen = GetDC(0);
-        if hdc_screen == 0 {
-            return None;
-        }
-        let hdc_mem = CreateCompatibleDC(hdc_screen);
-        if hdc_mem == 0 {
-            ReleaseDC(0, hdc_screen);
-            return None;
-        }
+    pub enum CaptureTarget {
+        Window(WindowRef),
+        Desktop,
+        None,
+    }
 
-        let hbm = CreateCompatibleBitmap(hdc_screen, out_w, out_h);
-        if hbm == 0 {
-            DeleteDC(hdc_mem);
-            ReleaseDC(0, hdc_screen);
-            return None;
-        }
-
-        let old_bm = SelectObject(hdc_mem, hbm);
-
-        // COLORONCOLOR (3) est jusqu'à 8x plus rapide que HALFTONE (4), garantissant 60 FPS
-        const COLORONCOLOR: i32 = 3;
-        SetStretchBltMode(hdc_mem, COLORONCOLOR);
-
-        StretchBlt(
-            hdc_mem, 0, 0, out_w, out_h,
-            hdc_screen, crop_x, crop_y, crop_w, crop_h,
-            SRCCOPY,
-        );
-
-        let mut bmi: BITMAPINFO = std::mem::zeroed();
-        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-        bmi.bmiHeader.biWidth = out_w;
-        bmi.bmiHeader.biHeight = -out_h; // Top-down DIB
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = BI_RGB;
-
-        let mut bgra = vec![0u8; (out_w * out_h * 4) as usize];
-        let res = GetDIBits(
-            hdc_mem,
-            hbm,
-            0,
-            out_h as u32,
-            bgra.as_mut_ptr() as *mut _,
-            &mut bmi,
-            DIB_RGB_COLORS,
-        );
-
-        SelectObject(hdc_mem, old_bm);
-        DeleteObject(hbm);
-        DeleteDC(hdc_mem);
-        ReleaseDC(0, hdc_screen);
-
-        if res == 0 {
-            return None;
-        }
-
-        let mut rgb = vec![0u8; (out_w * out_h * 3) as usize];
-        for (i, chunk) in bgra.chunks_exact(4).enumerate() {
-            rgb[i * 3] = chunk[2];     // R
-            rgb[i * 3 + 1] = chunk[1]; // G
-            rgb[i * 3 + 2] = chunk[0]; // B
-        }
-
-        Some(rgb)
+    pub fn resolve_target(_s: &StreamSettings, _sticky: Option<&WindowRef>) -> CaptureTarget {
+        CaptureTarget::None
+    }
+    pub fn source_size(_t: &CaptureTarget) -> Option<(u32, u32)> {
+        None
+    }
+    pub fn describe(_t: &CaptureTarget) -> (String, String, String) {
+        (String::new(), String::new(), "capture indisponible".to_string())
+    }
+    pub fn grab(_t: &CaptureTarget, _w: u32, _h: u32) -> Option<(Vec<u8>, u32, u32)> {
+        None
+    }
+    pub fn inject_key(_vk: u16, _down: bool) {}
+    pub fn inject_mouse(_dx: i32, _dy: i32, _buttons: u8) {}
+    pub fn inject_mouse_buttons(_a: bool, _b: bool, _c: bool, _d: bool) {}
+    pub fn release_mouse() {}
+    pub fn ensure_foreground(_t: &CaptureTarget) {}
+    pub fn window_alive(_t: &CaptureTarget) -> bool {
+        false
+    }
+    pub fn list_windows() -> Vec<WindowRef> {
+        Vec::new()
     }
 }
 
-#[cfg(not(windows))]
-fn capture_screen_rgb(_x: i32, _y: i32, _cw: i32, _ch: i32, _w: i32, _h: i32) -> Option<Vec<u8>> {
-    None
+// ---------------------------------------------------------------------------
+// Virtual gamepad (guest controller -> host)
+// ---------------------------------------------------------------------------
+
+/// Guest pad state, exactly what the viewer reads from XInput.
+#[derive(Debug, Clone, Copy, Default)]
+struct PadState {
+    buttons: u16,
+    left_trigger: u8,
+    right_trigger: u8,
+    thumb_lx: i16,
+    thumb_ly: i16,
+    thumb_rx: i16,
+    thumb_ry: i16,
 }
 
-// Encodage JPEG haute fidélité (Qualité 82 pour une netteté cristalline et 0 pixelisation)
-fn encode_frame_jpeg(rgb: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
-    let mut jpeg_buf = Vec::with_capacity(60_000);
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_buf, 82);
-    if encoder.encode(rgb, width, height, image::ExtendedColorType::Rgb8).is_ok() {
-        Some(jpeg_buf)
+impl PadState {
+    fn is_neutral(&self) -> bool {
+        self.buttons == 0
+            && self.left_trigger == 0
+            && self.right_trigger == 0
+            && self.thumb_lx.abs() < 1500
+            && self.thumb_ly.abs() < 1500
+            && self.thumb_rx.abs() < 1500
+            && self.thumb_ry.abs() < 1500
+    }
+
+    /// `G <hex buttons> <lt> <rt> <lx> <ly> <rx> <ry>`
+    fn parse(payload: &str) -> Option<Self> {
+        let parts: Vec<&str> = payload.split_whitespace().collect();
+        if parts.len() < 7 {
+            return None;
+        }
+        Some(Self {
+            buttons: u16::from_str_radix(parts[0].trim_start_matches("0x"), 16).ok()?,
+            left_trigger: parts[1].parse().ok()?,
+            right_trigger: parts[2].parse().ok()?,
+            thumb_lx: parts[3].parse().ok()?,
+            thumb_ly: parts[4].parse().ok()?,
+            thumb_rx: parts[5].parse().ok()?,
+            thumb_ry: parts[6].parse().ok()?,
+        })
+    }
+}
+
+/// Virtual Xbox 360 pad backed by ViGEmBus. Guest controllers are forwarded into it.
+struct VirtualPad {
+    #[cfg(windows)]
+    inner: Option<vigem_client::Xbox360Wired<vigem_client::Client>>,
+    last: PadState,
+}
+
+impl VirtualPad {
+    fn open() -> Self {
+        #[cfg(windows)]
+        {
+            match vigem_client::Client::connect() {
+                Ok(client) => {
+                    let mut target = vigem_client::Xbox360Wired::new(
+                        client,
+                        vigem_client::TargetId::XBOX360_WIRED,
+                    );
+                    match target.plugin() {
+                        Ok(()) => {
+                            info!("Manette virtuelle Xbox 360 branchée (ViGEmBus).");
+                            return Self {
+                                inner: Some(target),
+                                last: PadState::default(),
+                            };
+                        }
+                        Err(e) => warn!("ViGEmBus : branchement de la manette virtuelle impossible ({:?}).", e),
+                    }
+                }
+                Err(e) => warn!(
+                    "ViGEmBus introuvable ({:?}) : les manettes des invités ne seront pas transmises. Installez le pilote ViGEmBus.",
+                    e
+                ),
+            }
+        }
+        Self {
+            inner: None,
+            last: PadState::default(),
+        }
+    }
+
+    fn is_ready(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.inner.is_some()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+
+    fn update(&mut self, state: PadState) {
+        #[cfg(windows)]
+        if let Some(target) = self.inner.as_mut() {
+            let report = vigem_client::XGamepad {
+                buttons: vigem_client::XButtons(state.buttons),
+                left_trigger: state.left_trigger,
+                right_trigger: state.right_trigger,
+                thumb_lx: state.thumb_lx,
+                thumb_ly: state.thumb_ly,
+                thumb_rx: state.thumb_rx,
+                thumb_ry: state.thumb_ry,
+            };
+            if let Err(e) = target.update(&report) {
+                warn!("Manette virtuelle : mise à jour refusée ({:?}).", e);
+            }
+        }
+        self.last = state;
+    }
+
+    fn neutralize(&mut self) {
+        if !self.last.is_neutral() {
+            self.update(PadState::default());
+        }
+    }
+}
+
+impl Drop for VirtualPad {
+    fn drop(&mut self) {
+        self.neutralize();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Encoding
+// ---------------------------------------------------------------------------
+
+fn encode_frame(rgb: &[u8], width: u32, height: u32, quality: u8) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(96_000);
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality);
+    if encoder
+        .encode(rgb, width, height, image::ExtendedColorType::Rgb8)
+        .is_ok()
+    {
+        Some(out)
     } else {
         None
     }
 }
 
-// Démarrage de la capture audio système WASAPI Loopback via cpal
-fn start_audio_capture_thread(
-    audio_queue: Arc<Mutex<Vec<u8>>>,
+fn write_header(buf: &mut [u8; FRAME_HEADER_LEN], kind: u8, a: u16, b: u16, len: u32) {
+    buf[0..4].copy_from_slice(&FRAME_MAGIC);
+    buf[4] = kind;
+    buf[5] = 0;
+    buf[6..8].copy_from_slice(&a.to_le_bytes()); // video: width   / audio: channels
+    buf[8..10].copy_from_slice(&b.to_le_bytes()); // video: height  / audio: kHz
+    buf[10..12].copy_from_slice(&0u16.to_le_bytes());
+    buf[12..16].copy_from_slice(&len.to_le_bytes());
+}
+
+// ---------------------------------------------------------------------------
+// Audio loopback
+// ---------------------------------------------------------------------------
+
+fn start_audio_capture(
+    bus: Arc<AudioBus>,
+    volume: u8,
+    wanted_device: String,
+    stats: Arc<LiveStats>,
     running: Arc<AtomicBool>,
 ) {
     thread::spawn(move || {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
         let host = cpal::default_host();
+        // The selected game plays on the system default output; capture that one.
+        let _ = &wanted_device;
         let device = match host.default_output_device() {
             Some(d) => d,
             None => {
-                warn!("Aucun périphérique audio de sortie trouvé pour la capture loopback.");
+                let msg = "Aucune sortie audio disponible".to_string();
+                warn!("{} : diffusion vidéo sans son.", msg);
+                *stats.audio_error.lock() = msg;
                 return;
             }
         };
+        let device_name = format!("{:?}", device.description());
 
-        // Sur Windows WASAPI, créer un input stream sur le default_output_device effectue la capture loopback du son joué
-        let supported_configs = match device.supported_input_configs() {
-            Ok(configs) => configs,
+        let configs: Vec<_> = match device.supported_input_configs() {
+            Ok(c) => c.collect(),
             Err(e) => {
-                warn!("Impossible d'énumérer les configurations audio loopback : {}", e);
+                let msg = format!("Loopback indisponible sur '{}' : {}", device_name, e);
+                warn!("{}", msg);
+                *stats.audio_error.lock() = msg;
                 return;
             }
         };
 
-        let config = match supported_configs.into_iter().next() {
-            Some(c) => c.with_max_sample_rate().config(),
+        // Prefer stereo 48 kHz so the client never has to resample at 44.1 kHz.
+        let mut chosen = None;
+        for cfg in &configs {
+            if cfg.channels() == 2 && cfg.max_sample_rate() >= 48_000 {
+                chosen = Some(cfg.clone().with_sample_rate(48_000).config());
+                break;
+            }
+        }
+        if chosen.is_none() {
+            chosen = configs
+                .into_iter()
+                .next()
+                .map(|c| c.with_max_sample_rate().config());
+        }
+        let stream_config = match chosen {
+            Some(c) => c,
             None => {
-                warn!("Aucune configuration audio loopback supportée.");
+                let msg = "Aucune configuration audio exploitable".to_string();
+                warn!("{}.", msg);
+                *stats.audio_error.lock() = msg;
                 return;
             }
         };
 
-        let sample_rate = config.sample_rate;
-        let channels = config.channels;
-        info!("Capture audio système loopback active : {} Hz, {} canaux", sample_rate, channels);
+        let sample_rate = stream_config.sample_rate;
+        let channels = stream_config.channels;
+        info!(
+            "Capture audio système : {} Hz, {} canal(aux), volume {}%",
+            sample_rate, channels, volume
+        );
 
-        let q = audio_queue.clone();
+        let gain = (volume as f32 / 100.0).clamp(0.0, 1.0);
+        let bus_clone = bus.clone();
+        let chunk_bytes = ((sample_rate as usize * channels as usize * 20) / 1000) * 2;
+        let mut pending: Vec<u8> = Vec::with_capacity(chunk_bytes * 2);
+
         let stream = device.build_input_stream(
-            config,
+            stream_config,
             move |data: &[f32], _| {
-                // Conversion f32 -> i16 PCM
-                let mut pcm = Vec::with_capacity(data.len() * 2);
-                for &s in data {
-                    let clamped = s.clamp(-1.0, 1.0);
-                    let val = (clamped * 32767.0) as i16;
-                    pcm.extend_from_slice(&val.to_le_bytes());
+                for &sample in data {
+                    let v = (sample.clamp(-1.0, 1.0) * gain * 32767.0) as i16;
+                    pending.extend_from_slice(&v.to_le_bytes());
                 }
-                let mut lock = q.lock();
-                if lock.len() < 48_000 {
-                    lock.extend_from_slice(&pcm);
+                while chunk_bytes > 0 && pending.len() >= chunk_bytes {
+                    let rest = pending.split_off(chunk_bytes);
+                    let chunk = std::mem::replace(&mut pending, rest);
+                    bus_clone.push(chunk, sample_rate, channels as u8);
                 }
             },
-            |err| {
-                warn!("Erreur flux audio loopback : {}", err);
-            },
+            |err| warn!("Erreur du flux audio : {}", err),
             None,
         );
 
-        if let Ok(st) = stream {
-            let _ = st.play();
-            while running.load(Ordering::Relaxed) {
-                thread::sleep(Duration::from_millis(50));
+        match stream {
+            Ok(st) => match st.play() {
+                Ok(()) => {
+                    stats.audio_ok.store(true, Ordering::Relaxed);
+                    *stats.audio_error.lock() = String::new();
+                    *stats.audio_device_name.lock() = device_name.clone();
+                    info!("Son du jeu capturé sur '{}' ({} Hz)", device_name, sample_rate);
+                    while running.load(Ordering::Relaxed) {
+                        thread::sleep(Duration::from_millis(100));
+                    }
+                }
+                Err(e) => {
+                    let msg = format!("Lecture loopback impossible sur '{}' : {}", device_name, e);
+                    warn!("{}", msg);
+                    *stats.audio_error.lock() = msg;
+                }
+            },
+            Err(e) => {
+                let msg = format!("Capture audio impossible sur '{}' : {}", device_name, e);
+                warn!("{}", msg);
+                *stats.audio_error.lock() = msg;
             }
         }
     });
 }
 
-fn handle_client_stream(
-    mut stream: TcpStream,
-    target_hint: String,
-    audio_queue: Arc<Mutex<Vec<u8>>>,
-    udp_fwd: Arc<UdpSocket>,
-    running: Arc<AtomicBool>,
-) {
-    let _ = stream.set_nodelay(true);
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
+// ---------------------------------------------------------------------------
+// Client connection
+// ---------------------------------------------------------------------------
 
-    let mut stream_read = match stream.try_clone() {
+#[derive(Debug, Default)]
+struct InputState {
+    held: HashSet<u16>,
+    buttons: u8,
+    last_activity: Option<Instant>,
+}
+
+fn apply_key_state(
+    state: &mut InputState,
+    target: &engine::CaptureTarget,
+    wanted: &[u16],
+    focus: bool,
+) {
+    let wanted: HashSet<u16> = wanted.iter().copied().filter(|v| *v > 0).collect();
+    if focus || !wanted.is_empty() {
+        engine::ensure_foreground(target);
+    }
+    for vk in wanted.iter() {
+        if !state.held.contains(vk) {
+            engine::inject_key(*vk, true);
+        }
+    }
+    for vk in state.held.iter() {
+        if !wanted.contains(vk) {
+            engine::inject_key(*vk, false);
+        }
+    }
+    state.held = wanted;
+    state.last_activity = Some(Instant::now());
+}
+
+fn release_all(state: &mut InputState) {
+    for vk in state.held.drain() {
+        engine::inject_key(vk, false);
+    }
+    if state.buttons != 0 {
+        engine::inject_mouse_buttons(true, true, false, false);
+        state.buttons = 0;
+    }
+}
+
+/// Buffered line reader: a TCP read that splits a command can never lose it.
+struct LineReader {
+    pending: Vec<u8>,
+}
+
+impl LineReader {
+    fn new() -> Self {
+        Self {
+            pending: Vec::with_capacity(4096),
+        }
+    }
+
+    fn feed(&mut self, data: &[u8]) -> Vec<String> {
+        self.pending.extend_from_slice(data);
+        if self.pending.len() > 16 * 1024 {
+            self.pending.clear();
+            return Vec::new();
+        }
+        let mut lines = Vec::new();
+        while let Some(pos) = self.pending.iter().position(|b| *b == b'\n') {
+            let raw: Vec<u8> = self.pending.drain(..=pos).collect();
+            let text = String::from_utf8_lossy(&raw);
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                lines.push(trimmed.to_string());
+            }
+        }
+        lines
+    }
+}
+
+fn handle_client(
+    mut stream: TcpStream,
+    settings: Arc<StreamSettings>,
+    frames: Arc<FrameSlot>,
+    audio: Arc<AudioBus>,
+    stats: Arc<LiveStats>,
+    running: Arc<AtomicBool>,
+    target: Arc<Mutex<engine::CaptureTarget>>,
+) {
+    let peer = stream
+        .peer_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|_| "inconnu".to_string());
+    info!("Client de diffusion connecté : {}", peer);
+    let _ = stream.set_nodelay(true);
+    // A slow peer must never freeze the encoder.
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(80)));
+
+    stats.clients.fetch_add(1, Ordering::Relaxed);
+    let mut pad = VirtualPad::open();
+    // Bitrate the client asked for (it can lower it without renegotiating).
+    let requested_kbps = Arc::new(AtomicU32::new(0));
+
+    // ---- input reader (client -> host) ----------------------------------
+    let input_running = running.clone();
+    let mut input_stream = match stream.try_clone() {
         Ok(s) => s,
         Err(_) => return,
     };
-
-    let input_state = Arc::new(Mutex::new(InputState::new()));
-
-    // Thread de réception des entrées (Clavier ZQSD continu + Souris 3D / Tirs)
-    let input_clone = input_state.clone();
-    let udp_fwd_clone = udp_fwd.clone();
-    let running_reader = running.clone();
-
+    let input_target = target.clone();
+    let input_stats = stats.clone();
+    let input_bitrate = requested_kbps.clone();
+    let peer_for_input = peer.clone();
     thread::spawn(move || {
-        let mut buf = [0u8; 1024];
-        while running_reader.load(Ordering::Relaxed) {
-            match stream_read.read(&mut buf) {
+        let mut reader = LineReader::new();
+        let mut state = InputState::default();
+        let mut buf = [0u8; 4096];
+        let _ = input_stream.set_read_timeout(Some(Duration::from_millis(200)));
+        while input_running.load(Ordering::Relaxed) {
+            match input_stream.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    if let Ok(text) = std::str::from_utf8(&buf[..n]) {
-                        for line in text.lines() {
-                            let msg = line.trim();
-                            if msg.starts_with("INPUT:") {
-                                let parts: Vec<&str> = msg.split(':').collect();
-                                if parts.len() >= 3 {
-                                    let keys_csv = parts[2];
-                                    let vks: Vec<u16> = keys_csv
-                                        .split(',')
-                                        .map(|s| s.trim())
-                                        .filter_map(map_key_to_vk)
-                                        .collect();
-
-                                    input_clone.lock().update_keys(&vks);
-
-                                    let test_msg = format!("KEYS:999999:Invite:{}", keys_csv);
-                                    let _ = udp_fwd_clone.send_to(test_msg.as_bytes(), "127.0.0.1:39999");
-                                }
-                            } else if msg.starts_with("MOUSE:") {
-                                // MOUSE:dx:dy:left_down:right_down
-                                let parts: Vec<&str> = msg.split(':').collect();
-                                if parts.len() >= 5 {
-                                    let dx: i32 = parts[1].parse().unwrap_or(0);
-                                    let dy: i32 = parts[2].parse().unwrap_or(0);
-                                    let left: bool = parts[3] == "1";
-                                    let right: bool = parts[4] == "1";
-
-                                    #[cfg(windows)]
-                                    {
-                                        let mut st = input_clone.lock();
-                                        send_mouse_input(dx, dy, left, right, st.mouse_l, st.mouse_r);
-                                        st.mouse_l = left;
-                                        st.mouse_r = right;
-                                    }
-                                }
+                    for line in reader.feed(&buf[..n]) {
+                        if let Some(rest) = line.strip_prefix("K ") {
+                            let keys: Vec<u16> = rest
+                                .split(',')
+                                .filter_map(|t| u16::from_str_radix(t.trim(), 16).ok())
+                                .collect();
+                            let guard = input_target.lock();
+                            apply_key_state(&mut state, &guard, &keys, false);
+                        } else if let Some(rest) = line.strip_prefix("M ") {
+                            let parts: Vec<i32> = rest
+                                .split_whitespace()
+                                .filter_map(|t| t.parse::<i32>().ok())
+                                .collect();
+                            if parts.len() >= 3 {
+                                let guard = input_target.lock();
+                                engine::ensure_foreground(&guard);
+                                engine::inject_mouse(parts[0], parts[1], parts[2] as u8);
+                                state.buttons = parts[2] as u8;
+                            }
+                        } else if line == "F" {
+                            let guard = input_target.lock();
+                            engine::ensure_foreground(&guard);
+                        } else if let Some(rest) = line.strip_prefix("G ") {
+                            if let Some(state) = PadState::parse(rest) {
+                                // The pad lives in this thread, no lock needed.
+                                pad.update(state);
+                            }
+                        } else if let Some(rest) = line.strip_prefix("B ") {
+                            if let Ok(kbps) = rest.trim().parse::<u32>() {
+                                input_bitrate.store(kbps.clamp(2_000, 120_000), Ordering::Relaxed);
                             }
                         }
                     }
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // Watchdog de sécurité : relâche les touches si inactif depuis 400ms
-                    let mut st = input_clone.lock();
-                    if !st.held_keys.is_empty() && st.last_packet.elapsed() > Duration::from_millis(400) {
-                        st.release_all();
+                    if let Some(last) = state.last_activity {
+                        if last.elapsed() > Duration::from_millis(700) && !state.held.is_empty() {
+                            release_all(&mut state);
+                        }
                     }
-                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(ref e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    if let Some(last) = state.last_activity {
+                        if last.elapsed() > Duration::from_millis(700) {
+                            release_all(&mut state);
+                        }
+                    }
                 }
                 Err(_) => break,
             }
         }
-        input_clone.lock().release_all();
+        release_all(&mut state);
+        input_stats.clients.fetch_sub(1, Ordering::Relaxed);
+        info!("Client de diffusion déconnecté : {}", peer_for_input);
     });
 
-    // Détermination de la zone de capture (Jeu cible vs Plein écran)
-    let (mut crop_x, mut crop_y, mut crop_w, mut crop_h) = find_and_focus_window(&target_hint);
-    info!(
-        "Zone de capture initialisée pour '{}' : pos=({}, {}), taille={}x{}",
-        target_hint, crop_x, crop_y, crop_w, crop_h
+    // ---- video + audio writer -------------------------------------------
+    let mut controller = RateController::new(
+        settings.bitrate_kbps,
+        settings.quality_min,
+        settings.quality_max,
     );
-
-    // Résolution de diffusion haute qualité : 1920x1080 (ou taille native du jeu)
-    let stream_w = 1920i32;
-    let stream_h = 1080i32;
-    let frame_interval = Duration::from_millis(16); // 60 FPS ultra fluide
-
-    let mut last_window_check = Instant::now();
+    let mut ladder = FpsLadder::new(settings.fps);
+    let mut last_seq = 0u64;
+    let mut applied_kbps = settings.bitrate_kbps;
+    let mut audio_cursor = 0u64;
+    let mut window_start = Instant::now();
+    let mut window_bits: u64 = 0;
+    let mut next_frame = Instant::now();
 
     while running.load(Ordering::Relaxed) {
-        let start = Instant::now();
+        let interval = Duration::from_micros(1_000_000 / ladder.current().max(1) as u64);
 
-        // Réajuste la position de la fenêtre toutes les 2 secondes
-        if last_window_check.elapsed() > Duration::from_secs(2) {
-            let (nx, ny, nw, nh) = find_and_focus_window(&target_hint);
-            crop_x = nx;
-            crop_y = ny;
-            crop_w = nw;
-            crop_h = nh;
-            last_window_check = Instant::now();
-        }
+        if let Some((seq, frame)) = frames.latest_after(last_seq) {
+            last_seq = seq;
+            let quality = if settings.rate_control == RateControl::Quality {
+                settings.quality_max
+            } else {
+                controller.quality()
+            };
 
-        // 1. Transmission de l'audio si présent dans la file (b"CLAU")
-        {
-            let mut audio_data = Vec::new();
-            {
-                let mut q = audio_queue.lock();
-                if !q.is_empty() {
-                    let take_len = q.len().min(4096);
-                    audio_data = q.drain(..take_len).collect();
-                }
-            }
-            if !audio_data.is_empty() {
-                let mut audio_hdr = [0u8; 12];
-                audio_hdr[0..4].copy_from_slice(b"CLAU");
-                audio_hdr[4..8].copy_from_slice(&(audio_data.len() as u32).to_be_bytes());
-                audio_hdr[8..10].copy_from_slice(&(48000u16).to_be_bytes()); // 48kHz
-                audio_hdr[10] = 2; // Stéréo
-                audio_hdr[11] = 16; // 16 bits PCM
-
-                if stream.write_all(&audio_hdr).is_err() || stream.write_all(&audio_data).is_err() {
-                    break;
-                }
-            }
-        }
-
-        // 2. Capture et Envoi de la trame vidéo (b"CLFR")
-        if let Some(rgb) = capture_screen_rgb(crop_x, crop_y, crop_w, crop_h, stream_w, stream_h) {
-            if let Some(jpeg) = encode_frame_jpeg(&rgb, stream_w as u32, stream_h as u32) {
-                let mut header = [0u8; 12];
-                header[0..4].copy_from_slice(b"CLFR");
-                header[4..8].copy_from_slice(&(jpeg.len() as u32).to_be_bytes());
-                header[8..10].copy_from_slice(&(stream_w as u16).to_be_bytes());
-                header[10..12].copy_from_slice(&(stream_h as u16).to_be_bytes());
-
-                if stream.write_all(&header).is_err() || stream.write_all(&jpeg).is_err() || stream.flush().is_err() {
-                    break;
-                }
-            }
-        }
-
-        let elapsed = start.elapsed();
-        if elapsed < frame_interval {
-            thread::sleep(frame_interval - elapsed);
-        }
-    }
-
-    input_state.lock().release_all();
-}
-
-fn main() {
-    tracing_subscriber::fmt::init();
-    info!("CoopLink Real-Time Screen Capture & Audio Service démarré...");
-
-    let args: Vec<String> = std::env::args().collect();
-    let target_hint = if args.len() > 2 {
-        args[2].clone()
-    } else if args.len() > 1 && !args[1].ends_with(".conf") {
-        args[1].clone()
-    } else {
-        String::new()
-    };
-
-    let running = Arc::new(AtomicBool::new(true));
-    let audio_queue = Arc::new(Mutex::new(Vec::new()));
-
-    // Démarrage du thread de capture audio système
-    start_audio_capture_thread(audio_queue.clone(), running.clone());
-
-    let udp_socket = Arc::new(
-        UdpSocket::bind("0.0.0.0:47989")
-            .or_else(|_| UdpSocket::bind("0.0.0.0:0"))
-            .expect("Bind UDP capture"),
-    );
-
-    // Écoute des paquets UDP legacy
-    let udp_clone = udp_socket.clone();
-    let running_udp = running.clone();
-    thread::spawn(move || {
-        let mut buf = [0u8; 2048];
-        while running_udp.load(Ordering::Relaxed) {
-            if let Ok((len, src)) = udp_clone.recv_from(&mut buf) {
-                if let Ok(msg) = std::str::from_utf8(&buf[..len]) {
-                    if msg.starts_with("VIEWER:HELLO") {
-                        let _ = udp_clone.send_to(b"HOST:ACK:READY", src);
+            if let Some(jpeg) = encode_frame(&frame.rgb, frame.width, frame.height, quality) {
+                if jpeg.len() <= MAX_FRAME_BYTES {
+                    let mut header = [0u8; FRAME_HEADER_LEN];
+                    write_header(
+                        &mut header,
+                        FRAME_KIND_VIDEO,
+                        frame.width as u16,
+                        frame.height as u16,
+                        jpeg.len() as u32,
+                    );
+                    let sent = stream
+                        .write_all(&header)
+                        .and_then(|_| stream.write_all(&jpeg))
+                        .and_then(|_| stream.flush());
+                    match sent {
+                        Ok(()) => {
+                            window_bits += (jpeg.len() as u64 + FRAME_HEADER_LEN as u64) * 8;
+                            stats.frames_sent.fetch_add(1, Ordering::Relaxed);
+                            stats
+                                .bytes_sent
+                                .fetch_add(jpeg.len() as u64, Ordering::Relaxed);
+                            stats.quality.store(quality, Ordering::Relaxed);
+                        }
+                        Err(e) => {
+                            // Skip this frame instead of stalling the capture loop.
+                            stats.dropped.fetch_add(1, Ordering::Relaxed);
+                            if e.kind() == std::io::ErrorKind::BrokenPipe
+                                || e.kind() == std::io::ErrorKind::ConnectionReset
+                            {
+                                break;
+                            }
+                        }
                     }
                 }
             }
-        }
-    });
 
-    // Serveur TCP de streaming vidéo et audio haute performance (Port 47989)
-    let listener = match TcpListener::bind("0.0.0.0:47989") {
+            if settings.audio_enabled {
+                let (chunks, rate, channels) = audio.take_since(&mut audio_cursor);
+                for chunk in chunks {
+                    let mut header = [0u8; FRAME_HEADER_LEN];
+                    write_header(
+                        &mut header,
+                        FRAME_KIND_AUDIO,
+                        channels as u16,
+                        (rate / 1000) as u16,
+                        chunk.len() as u32,
+                    );
+                    if stream
+                        .write_all(&header)
+                        .and_then(|_| stream.write_all(&chunk))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+
+            // Short review window: reacts to a congestion spike in 400 ms.
+            let requested = requested_kbps.load(Ordering::Relaxed);
+            if requested > 0 && requested != applied_kbps {
+                controller.set_target_kbps(requested);
+                applied_kbps = requested;
+                info!("Débit cible ajusté à la demande du client : {} kbps", requested);
+            }
+
+            let elapsed = window_start.elapsed();
+            if elapsed >= Duration::from_millis(400) {
+                let quality = controller.review(window_bits, elapsed);
+                if ladder.observe(controller.at_floor(), controller.at_ceiling()) {
+                    info!(
+                        "Débit insuffisant : cadence ajustée à {} FPS (qualité {})",
+                        ladder.current(),
+                        quality
+                    );
+                }
+                stats.fps.store(ladder.current(), Ordering::Relaxed);
+                window_bits = 0;
+                window_start = Instant::now();
+            }
+        }
+
+        next_frame += interval;
+        let now = Instant::now();
+        if next_frame > now {
+            thread::sleep(next_frame - now);
+        } else if now.duration_since(next_frame) > interval * 3 {
+            next_frame = now; // never burst to catch up
+        }
+    }
+
+    let _ = stream.flush();
+    info!("Session de diffusion terminée pour {}", peer);
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+fn main() {
+    tracing_subscriber::fmt().with_env_filter("info").init();
+
+    let args: Vec<String> = std::env::args().collect();
+    let settings_path = args
+        .get(1)
+        .filter(|a| a.ends_with(".json"))
+        .map(PathBuf::from)
+        .unwrap_or_else(StreamSettings::default_path);
+
+    let mut settings = StreamSettings::load_or_default(&settings_path);
+    // Legacy positional argument: a window title to capture.
+    if let Some(title) = args.get(2).filter(|t| !t.trim().is_empty()) {
+        if settings.target_title.trim().is_empty() && settings.target_process.trim().is_empty() {
+            settings.target_title = title.clone();
+        }
+    }
+    settings.clamp();
+
+    info!(
+        "Service de capture prêt : {}x{} @ {} FPS, cible {:.1} Mbps, encodeur {}",
+        settings.width,
+        settings.height,
+        settings.fps,
+        settings.bitrate_kbps as f32 / 1000.0,
+        if settings.encoder.is_empty() {
+            "auto"
+        } else {
+            &settings.encoder
+        }
+    );
+
+    let running = Arc::new(AtomicBool::new(true));
+    let frames = Arc::new(FrameSlot::new());
+    let audio = Arc::new(AudioBus::new());
+    let stats = Arc::new(LiveStats::default());
+    let target = Arc::new(Mutex::new(engine::resolve_target(&settings, None)));
+    let settings = Arc::new(settings);
+
+    if settings.audio_enabled {
+        {
+            start_audio_capture(
+                audio.clone(),
+                settings.audio_volume,
+                settings.audio_device.clone(),
+                stats.clone(),
+                running.clone(),
+            );
+        }
+    }
+
+    // ---- capture thread --------------------------------------------------
+    {
+        let frames = frames.clone();
+        let running = running.clone();
+        let settings = settings.clone();
+        let target = target.clone();
+        let stats = stats.clone();
+        let settings_path = settings_path.clone();
+
+        thread::spawn(move || {
+            let mut seq = 0u64;
+            let mut last_refresh = Instant::now();
+            let mut sticky: Option<engine::WindowRef> = None;
+            let mut last_message = String::new();
+            // Hot reload: the UI rewrites the session file when the user changes
+            // resolution, FPS, bitrate or target while the session is running.
+            let mut live = (*settings).clone();
+            let mut last_mtime = std::fs::metadata(&settings_path)
+                .and_then(|m| m.modified())
+                .ok();
+            let mut last_file_check = Instant::now();
+
+            while running.load(Ordering::Relaxed) {
+                let started = Instant::now();
+
+                if last_file_check.elapsed() > Duration::from_millis(500) {
+                    last_file_check = Instant::now();
+                    let mtime = std::fs::metadata(&settings_path)
+                        .and_then(|m| m.modified())
+                        .ok();
+                    if mtime.is_some() && mtime != last_mtime {
+                        last_mtime = mtime;
+                        if let Some(mut reloaded) = StreamSettings::load_from(&settings_path) {
+                            reloaded.clamp();
+                            info!(
+                                "Session rechargée : {}x{} @ {} FPS, {:.1} Mbps, cible '{}'",
+                                reloaded.width,
+                                reloaded.height,
+                                reloaded.fps,
+                                reloaded.bitrate_kbps as f32 / 1000.0,
+                                if reloaded.target_process.is_empty() {
+                                    reloaded.target_title.clone()
+                                } else {
+                                    reloaded.target_process.clone()
+                                }
+                            );
+                            live = reloaded;
+                            last_refresh = Instant::now() - Duration::from_secs(2);
+                        }
+                    }
+                }
+
+                let needs_refresh = last_refresh.elapsed() > Duration::from_secs(1)
+                    || !engine::window_alive(&target.lock());
+                if needs_refresh {
+                    let resolved = engine::resolve_target(&live, sticky.as_ref());
+                    let message = engine::describe(&resolved).2;
+                    if message != last_message {
+                        match &resolved {
+                            engine::CaptureTarget::Window(w) => {
+                                info!("Capture de la fenêtre '{}' [{}]", w.title, w.process)
+                            }
+                            engine::CaptureTarget::Desktop => {
+                                warn!("Aucune fenêtre ciblée : capture de l'écran complet (mode secours).")
+                            }
+                            engine::CaptureTarget::None => warn!(
+                                "Aucune fenêtre de jeu détectée : capture en attente, le bureau n'est pas diffusé."
+                            ),
+                        }
+                        last_message = message;
+                    }
+                    if let engine::CaptureTarget::Window(w) = &resolved {
+                        sticky = Some(w.clone());
+                    }
+                    *target.lock() = resolved;
+                    last_refresh = Instant::now();
+                }
+
+                let (out_w, out_h) = {
+                    let guard = target.lock();
+                    match engine::source_size(&guard) {
+                        // Never upscale above the native window size.
+                        Some((sw, sh)) => (
+                            (live.width.min(sw) / 2) * 2,
+                            (live.height.min(sh) / 2) * 2,
+                        ),
+                        None => (live.width, live.height),
+                    }
+                };
+
+                let grabbed = {
+                    let guard = target.lock();
+                    engine::grab(&guard, out_w, out_h)
+                };
+
+                if let Some((rgb, w, h)) = grabbed {
+                    seq += 1;
+                    frames.publish(
+                        seq,
+                        VideoFrame {
+                            rgb,
+                            width: w,
+                            height: h,
+                        },
+                    );
+                    stats.width.store(w, Ordering::Relaxed);
+                    stats.height.store(h, Ordering::Relaxed);
+                }
+
+                let elapsed = started.elapsed();
+                let budget = live.frame_interval();
+                if elapsed < budget {
+                    thread::sleep(budget - elapsed);
+                }
+            }
+        });
+    }
+
+    // ---- status publisher ------------------------------------------------
+    {
+        let stats = stats.clone();
+        let target = target.clone();
+        let running = running.clone();
+        thread::spawn(move || {
+            let mut last_frames = 0u64;
+            let mut last_bytes = 0u64;
+            let mut last_at = Instant::now();
+            while running.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_millis(500));
+                let frames_now = stats.frames_sent.load(Ordering::Relaxed);
+                let bytes_now = stats.bytes_sent.load(Ordering::Relaxed);
+                let elapsed = last_at.elapsed().as_secs_f64().max(0.2);
+                let fps = (frames_now - last_frames) as f32 / elapsed as f32;
+                let kbps = ((bytes_now - last_bytes) * 8) as f32 / elapsed as f32 / 1000.0;
+
+                let (title, process, message, source) = {
+                    let guard = target.lock();
+                    let (title, process, message) = engine::describe(&guard);
+                    (title, process, message, engine::source_size(&guard))
+                };
+
+                StreamStats {
+                    running: true,
+                    target_title: title,
+                    target_process: process,
+                    source_width: source.map(|(w, _)| w).unwrap_or(0),
+                    source_height: source.map(|(_, h)| h).unwrap_or(0),
+                    width: stats.width.load(Ordering::Relaxed),
+                    height: stats.height.load(Ordering::Relaxed),
+                    fps: stats.fps.load(Ordering::Relaxed).max(1),
+                    measured_fps: fps,
+                    measured_kbps: kbps as u32,
+                    quality: stats.quality.load(Ordering::Relaxed),
+                    dropped_frames: stats.dropped.load(Ordering::Relaxed),
+                    clients: stats.clients.load(Ordering::Relaxed),
+                    audio_active: stats.audio_ok.load(Ordering::Relaxed),
+                    audio_device: stats.audio_device_name.lock().clone(),
+                    audio_error: stats.audio_error.lock().clone(),
+                    message,
+                    updated_ms: 0,
+                }
+                .publish();
+
+                last_frames = frames_now;
+                last_bytes = bytes_now;
+                last_at = Instant::now();
+            }
+        });
+    }
+
+    // ---- stream listener -------------------------------------------------
+    let addr = format!("0.0.0.0:{}", settings.stream_port);
+    let listener = match TcpListener::bind(&addr) {
         Ok(l) => l,
         Err(e) => {
-            error!("Erreur bind TCP 47989: {}", e);
+            error!("Impossible d'écouter sur {} : {}", addr, e);
             return;
         }
     };
+    info!("Diffusion CoopLink en écoute sur {} (TCP)", addr);
 
-    info!("Serveur de flux direct (1080p 60 FPS + Audio) actif sur TCP 0.0.0.0:47989");
-
-    for stream in listener.incoming() {
-        match stream {
-            Ok(s) => {
-                info!("Client viewer connecté pour le streaming : {:?}", s.peer_addr());
-                let running_client = running.clone();
-                let audio_q = audio_queue.clone();
-                let udp_fwd = udp_socket.clone();
-                let hint = target_hint.clone();
+    for incoming in listener.incoming() {
+        match incoming {
+            Ok(stream) => {
+                let settings = settings.clone();
+                let frames = frames.clone();
+                let audio = audio.clone();
+                let stats = stats.clone();
+                let running = running.clone();
+                let target = target.clone();
                 thread::spawn(move || {
-                    handle_client_stream(s, hint, audio_q, udp_fwd, running_client);
+                    handle_client(stream, settings, frames, audio, stats, running, target)
                 });
             }
-            Err(e) => {
-                error!("Erreur incoming TCP: {}", e);
-            }
+            Err(e) => warn!("Connexion entrante refusée : {}", e),
         }
     }
 }

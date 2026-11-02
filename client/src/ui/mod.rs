@@ -1127,6 +1127,12 @@ impl eframe::App for CoopLinkApp {
                     self.streaming_engine.pairing.complete_pairing_on_client(&ack);
 
                     let app_name = self.streaming_engine.selected_app_name.clone();
+                    let mode = self.streaming_engine.coop_input_mode;
+                    self.streaming_engine.stream_viewer.player_index = mode.guest_player_index();
+                    self.streaming_engine.stream_viewer.guest_mouse_enabled =
+                        mode.guest_mouse_enabled();
+                    self.streaming_engine.stream_viewer.guest_gamepad =
+                        mode.guest_gamepad_enabled();
                     let _ = self
                         .streaming_engine
                         .stream_viewer

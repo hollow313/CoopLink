@@ -1,5 +1,5 @@
+use crate::streaming::settings::{RateControl, StreamSettings, DEFAULT_CONTROL_PORT, DEFAULT_STREAM_PORT};
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -121,6 +121,38 @@ pub fn is_virtual_display_adapter_name(name: &str) -> bool {
         || u.contains("REMOTE DESKTOP")
 }
 
+/// Label shown in the UI when no explicit game has been picked.
+pub const FOLLOW_FOREGROUND_LABEL: &str =
+    "Jeu actif au premier plan (Détection automatique DirectX / Vulkan)";
+
+/// Splits a UI selection into `(process, title fragment)`.
+///
+/// `"Jeu (.exe) : Cyberpunk2077"` -> `("Cyberpunk2077.exe", "")`
+/// `"Cyberpunk 2077"`            -> `("", "Cyberpunk 2077")`
+/// the "follow foreground" label  -> `("", "")`
+pub fn selection_to_target(selection: &str) -> (String, String) {
+    let trimmed = selection.trim();
+    if trimmed.is_empty() || trimmed == FOLLOW_FOREGROUND_LABEL {
+        return (String::new(), String::new());
+    }
+
+    let candidate = trimmed
+        .split(" : ")
+        .nth(1)
+        .unwrap_or(trimmed)
+        .trim()
+        .to_string();
+
+    if candidate.to_lowercase().ends_with(".exe") {
+        (candidate, String::new())
+    } else if trimmed.to_lowercase().starts_with("jeu (.exe)") {
+        // The .exe picker keeps only the file stem: match the window title instead.
+        (String::new(), candidate)
+    } else {
+        (String::new(), candidate)
+    }
+}
+
 /// Gestionnaire du service Hôte de Capture & Partage de Jeu CoopLink
 #[allow(dead_code)]
 pub struct CoopCaptureHost {
@@ -134,6 +166,8 @@ pub struct CoopCaptureHost {
     pub target_height: u32,
     pub target_fps: u32,
     pub dynamic_bitrate_kbps: u32,
+    pub quality_min: u8,
+    pub quality_max: u8,
     pub virtual_gamepad_driver_ready: bool,
     pub virtual_display_driver_ready: bool,
     // Options Audio Avancées (Isolation stricte du son du jeu)
@@ -149,6 +183,15 @@ pub struct CoopCaptureHost {
     pub default_gamepad_type: VirtualGamepadType,
     pub controller_slots: Vec<ControllerSlotAssignment>,
     pub service_port: u16,
+    pub stream_port: u16,
+    /// Process image of the game to capture (`Game.exe`). Empty = follow the foreground window.
+    pub target_process: String,
+    /// Window-title fragment used when `target_process` is empty.
+    pub target_title: String,
+    /// Settings actually handed to the capture service.
+    pub last_settings_path: Option<PathBuf>,
+    /// Signature of the last written session file, to avoid rewriting it every frame.
+    pub last_settings_signature: String,
 }
 
 #[allow(dead_code)]
@@ -165,7 +208,9 @@ impl CoopCaptureHost {
             target_width: 1920,
             target_height: 1080,
             target_fps: 60,
-            dynamic_bitrate_kbps: 30000,
+            dynamic_bitrate_kbps: 30_000,
+            quality_min: 42,
+            quality_max: 90,
             virtual_gamepad_driver_ready: true,
             virtual_display_driver_ready: true,
             anti_audio_echo_enabled: true,
@@ -190,7 +235,12 @@ impl CoopCaptureHost {
                 driver_connected: true,
                 xinput_slot_index: 0,
             }],
-            service_port: 47990,
+            service_port: DEFAULT_CONTROL_PORT,
+            stream_port: DEFAULT_STREAM_PORT,
+            target_process: String::new(),
+            target_title: String::new(),
+            last_settings_path: None,
+            last_settings_signature: String::new(),
         };
         mgr.detect_hardware_capabilities();
         mgr
@@ -225,7 +275,11 @@ impl CoopCaptureHost {
                     .iter()
                     .find(|g| {
                         let u = g.to_uppercase();
-                        u.contains("NVIDIA") || u.contains("RTX") || u.contains("GTX") || u.contains("RADEON") || u.contains("AMD")
+                        u.contains("NVIDIA")
+                            || u.contains("RTX")
+                            || u.contains("GTX")
+                            || u.contains("RADEON")
+                            || u.contains("AMD")
                     })
                     .or_else(|| physical_gpus.first())
                     .cloned();
@@ -250,10 +304,13 @@ impl CoopCaptureHost {
                     self.active_encoder = HardwareEncoder::Nvenc;
                 } else if all_upper.contains("AMD") || all_upper.contains("RADEON") {
                     self.active_encoder = HardwareEncoder::Amf;
-                } else if all_upper.contains("INTEL") || all_upper.contains("ARC") || all_upper.contains("IRIS") || all_upper.contains("UHD") {
+                } else if all_upper.contains("INTEL")
+                    || all_upper.contains("ARC")
+                    || all_upper.contains("IRIS")
+                    || all_upper.contains("UHD")
+                {
                     self.active_encoder = HardwareEncoder::QuickSync;
                 } else if gpu_upper.contains("DIRECTX 12") {
-                    // Par défaut sur Windows 11 avec écran virtuel SudoMaker, l'encodeur matériel GPU hôte est actif
                     self.active_encoder = HardwareEncoder::Nvenc;
                 } else {
                     self.active_encoder = HardwareEncoder::Software;
@@ -276,10 +333,13 @@ impl CoopCaptureHost {
         }
     }
 
-    /// Applique en 1 clic la Configuration Auto / Optimisée selon le débit montant mesuré et le GPU
+    /// Applique en 1 clic la Configuration Auto / Optimisée selon le débit montant mesuré et le GPU.
+    ///
+    /// The bitrate is derived from the measured upload (60 % of it) and clamped to
+    /// what the stream engine can actually sustain, instead of being a fixed number.
     pub fn apply_auto_optimized_profile(&mut self, upload_mbps: f32) {
         self.auto_optimized_mode = true;
-        // Toujours activer l'encodeur matériel GPU s'il était sur Software par erreur
+
         if self.active_encoder == HardwareEncoder::Software {
             let u = self.detected_gpu_name.to_uppercase();
             if u.contains("AMD") || u.contains("RADEON") {
@@ -291,23 +351,23 @@ impl CoopCaptureHost {
             }
         }
 
-        // Adaptation intelligente Résolution / FPS / Bitrate selon le débit montant mesuré
-        if upload_mbps >= 45.0 {
+        let usable_mbps = (upload_mbps.max(5.0) * 0.6).clamp(6.0, 60.0);
+
+        if usable_mbps >= 30.0 {
             self.target_width = 1920;
             self.target_height = 1080;
             self.target_fps = 60;
-            self.dynamic_bitrate_kbps = 35000;
-        } else if upload_mbps >= 20.0 {
+        } else if usable_mbps >= 15.0 {
             self.target_width = 1920;
             self.target_height = 1080;
-            self.target_fps = 60;
-            self.dynamic_bitrate_kbps = 22000;
+            self.target_fps = 45;
         } else {
             self.target_width = 1280;
             self.target_height = 720;
             self.target_fps = 60;
-            self.dynamic_bitrate_kbps = 12000;
         }
+
+        self.dynamic_bitrate_kbps = (usable_mbps * 1000.0) as u32;
 
         // Isolation audio stricte du jeu par défaut pour éviter tout écho
         self.anti_audio_echo_enabled = true;
@@ -317,17 +377,22 @@ impl CoopCaptureHost {
         self.foreground_game_only = true;
     }
 
-    /// Adapte dynamiquement le débit vidéo selon la latence mesurée sur le tunnel P2P CoopLink
+    /// Adapte le débit vidéo selon la latence mesurée sur le tunnel P2P CoopLink.
+    ///
+    /// A latency spike must never collapse the picture: the floor stays at 60 % of
+    /// the configured bitrate.
     pub fn adjust_dynamic_bitrate(&mut self, avg_ping_ms: u32) {
-        if avg_ping_ms <= 15 {
-            self.dynamic_bitrate_kbps = 35000;
-        } else if avg_ping_ms <= 40 {
-            self.dynamic_bitrate_kbps = 25000;
+        let floor = (self.dynamic_bitrate_kbps as f32 * 0.6) as u32;
+        let factor = if avg_ping_ms <= 20 {
+            1.0
+        } else if avg_ping_ms <= 45 {
+            0.9
         } else if avg_ping_ms <= 80 {
-            self.dynamic_bitrate_kbps = 15000;
+            0.8
         } else {
-            self.dynamic_bitrate_kbps = 10000;
-        }
+            0.65
+        };
+        self.dynamic_bitrate_kbps = ((self.dynamic_bitrate_kbps as f32 * factor) as u32).max(floor);
     }
 
     /// Assigne automatiquement un emplacement de manette virtuelle (Joueur 2, 3 ou 4) sans conflit avec le Joueur 1
@@ -357,64 +422,114 @@ impl CoopCaptureHost {
         next_player
     }
 
-    /// Génère le fichier de configuration interne lié exclusivement à l'interface virtuelle CoopLink
-    pub fn write_isolated_config(&self, target_game_exe: &str) -> PathBuf {
-        let base_dir = if let Ok(appdata) = std::env::var("APPDATA") {
-            PathBuf::from(appdata).join("CoopLink").join("capture_service")
+    /// Settings actually sent to the capture service (JSON, one file per session).
+    pub fn build_stream_settings(&self, game_selection: &str) -> StreamSettings {
+        // Explicit picker selection wins; the label is only a fallback.
+        let (process, title) = if self.target_process.trim().is_empty()
+            && self.target_title.trim().is_empty()
+        {
+            selection_to_target(game_selection)
         } else {
-            PathBuf::from("capture_service")
+            (self.target_process.clone(), self.target_title.clone())
         };
-        let _ = fs::create_dir_all(&base_dir);
-        let conf_path = base_dir.join("cooplink_capture.conf");
 
-        let conf_content = format!(
-            "# CoopLink Internal Foreground Game Capture Service\n\
-             cooplink_node_name = CoopLink Host ({})\n\
-             bind_address = {}\n\
-             port = 47989\n\
-             encoder = {}\n\
-             gamepad = {}\n\
-             upnp = disabled\n\
-             fec_percentage = 20\n\
-             min_threads = 2\n\
-             channels = 2\n\
-             audio_isolation_mode = {}\n\
-             audio_target_device = {}\n\
-             audio_volume_percent = {}\n\
-             exclude_voice_chat_audio = {}\n\
-             acoustic_echo_cancellation = {}\n\
-             capture_mode = foreground_game_window_only\n\
-             target_executable = {}\n\
-             origin_web_ui_allowed = pc\n",
-            self.bound_virtual_ip,
-            self.bound_virtual_ip,
-            self.active_encoder.as_engine_str(),
-            self.default_gamepad_type.as_engine_str(),
-            self.audio_capture_mode.as_conf_str(),
-            self.selected_audio_device,
-            self.stream_audio_volume,
-            if self.exclude_voice_chat_apps { "enabled" } else { "disabled" },
-            if self.acoustic_echo_cancellation { "enabled" } else { "disabled" },
-            target_game_exe
-        );
-
-        let _ = fs::write(&conf_path, conf_content);
-        conf_path
+        let mut settings = StreamSettings {
+            target_process: process,
+            target_title: title,
+            width: self.target_width,
+            height: self.target_height,
+            fps: self.target_fps,
+            bitrate_kbps: self.dynamic_bitrate_kbps,
+            rate_control: RateControl::Target,
+            quality_min: self.quality_min,
+            quality_max: self.quality_max,
+            audio_enabled: !matches!(self.audio_capture_mode, AudioCaptureMode::Muted),
+            audio_volume: self.stream_audio_volume.min(100) as u8,
+            encoder: self.active_encoder.as_engine_str().to_string(),
+            stream_port: self.stream_port,
+            ..StreamSettings::default()
+        };
+        settings.clamp();
+        settings
     }
 
-    /// Démarre le service de capture du jeu au premier plan lié à l'IP virtuelle CoopLink
-    pub fn start_daemon(&mut self, host_virtual_ip: Ipv4Addr, target_game_exe: &str) -> anyhow::Result<()> {
+    /// Écrit le fichier de session JSON consommé par le service de capture.
+    pub fn write_stream_settings(&self, game_selection: &str) -> PathBuf {
+        let settings = self.build_stream_settings(game_selection);
+        let path = StreamSettings::default_path();
+        if let Err(e) = settings.save_to(&path) {
+            warn!("Impossible d'écrire les réglages de diffusion : {}", e);
+        }
+        path
+    }
+
+    /// Rewrites the session file when the user changed resolution, FPS, bitrate or
+    /// target while a session is running. The service reloads it on mtime change.
+    pub fn persist_if_running(&mut self) {
+        if !self.is_running {
+            return;
+        }
+        let settings = self.build_stream_settings("");
+        let signature = format!(
+            "{}|{}|{}x{}@{}|{}|{}|{}|{}",
+            settings.target_process,
+            settings.target_title,
+            settings.width,
+            settings.height,
+            settings.fps,
+            settings.bitrate_kbps,
+            settings.quality_min,
+            settings.quality_max,
+            settings.audio_volume
+        );
+        if signature == self.last_settings_signature {
+            return;
+        }
+        let path = StreamSettings::default_path();
+        if settings.save_to(&path).is_ok() {
+            self.last_settings_signature = signature;
+            self.last_settings_path = Some(path);
+            info!(
+                "Réglages de diffusion mis à jour à chaud : {}x{} @ {} FPS, {:.1} Mbps",
+                settings.width,
+                settings.height,
+                settings.fps,
+                settings.bitrate_kbps as f32 / 1000.0
+            );
+        }
+    }
+
+    /// Démarre le service de capture du jeu ciblé.
+    pub fn start_daemon(
+        &mut self,
+        host_virtual_ip: Ipv4Addr,
+        game_selection: &str,
+    ) -> anyhow::Result<()> {
         if self.is_running {
             return Ok(());
         }
         self.bound_virtual_ip = host_virtual_ip;
-        let conf_path = self.write_isolated_config(target_game_exe);
+        let settings_path = self.write_stream_settings(game_selection);
+        self.last_settings_path = Some(settings_path.clone());
 
+        let settings = self.build_stream_settings(game_selection);
         info!(
-            "Démarrage du moteur de capture CoopLink lié à {} (Encodeur: {}, Mode Audio: {}, Jeu Premier Plan uniquement)",
+            "Démarrage de la diffusion CoopLink sur {} : {}x{} @ {} FPS, cible {:.1} Mbps, cible de capture '{}' (encodeur {})",
             self.bound_virtual_ip,
+            settings.width,
+            settings.height,
+            settings.fps,
+            settings.bitrate_kbps as f32 / 1000.0,
+            if settings.target_process.is_empty() {
+                if settings.target_title.is_empty() {
+                    "fenêtre au premier plan".to_string()
+                } else {
+                    settings.target_title.clone()
+                }
+            } else {
+                settings.target_process.clone()
+            },
             self.active_encoder.display_name(),
-            self.audio_capture_mode.as_conf_str()
         );
 
         let mut exe_candidates = vec![
@@ -432,10 +547,10 @@ impl CoopCaptureHost {
         let mut launched = false;
         for candidate in &exe_candidates {
             if candidate.exists() {
-                let conf_str = conf_path.to_string_lossy().to_string();
+                let settings_str = settings_path.to_string_lossy().to_string();
                 match crate::platform::windows::process::spawn_hidden(
                     &candidate.to_string_lossy(),
-                    &[&conf_str, target_game_exe],
+                    &[&settings_str],
                 ) {
                     Ok(_) => {
                         info!("Service de capture vidéo démarré : {}", candidate.display());
@@ -443,7 +558,11 @@ impl CoopCaptureHost {
                         break;
                     }
                     Err(e) => {
-                        warn!("Erreur lors du démarrage du service de capture sur {} : {}", candidate.display(), e);
+                        warn!(
+                            "Erreur lors du démarrage du service de capture sur {} : {}",
+                            candidate.display(),
+                            e
+                        );
                     }
                 }
             }

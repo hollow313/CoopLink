@@ -34,8 +34,8 @@ pub struct CoopPairRequest {
 pub struct CoopPairAck {
     pub success: bool,
     pub host_virtual_ip: Ipv4Addr,
-    pub stream_port_https: u16,
-    pub stream_port_http: u16,
+    pub stream_port: u16,
+    pub control_port: u16,
     pub assigned_player_slot: u8,
     pub host_cert_fingerprint: String,
     pub message: String,
@@ -129,8 +129,8 @@ impl CoopSessionPairing {
             return CoopPairAck {
                 success: false,
                 host_virtual_ip,
-                stream_port_https: 47984,
-                stream_port_http: 47989,
+                stream_port: crate::streaming::settings::DEFAULT_STREAM_PORT,
+                control_port: crate::streaming::settings::DEFAULT_CONTROL_PORT,
                 assigned_player_slot: 0,
                 host_cert_fingerprint: String::new(),
                 message: "Authentification cryptographique HMAC échouée".to_string(),
@@ -162,8 +162,8 @@ impl CoopSessionPairing {
         CoopPairAck {
             success: true,
             host_virtual_ip,
-            stream_port_https: 47984,
-            stream_port_http: 47989,
+            stream_port: crate::streaming::settings::DEFAULT_STREAM_PORT,
+            control_port: crate::streaming::settings::DEFAULT_CONTROL_PORT,
             assigned_player_slot: assigned_slot,
             host_cert_fingerprint: host_fp,
             message: format!("Joueur {} authentifié et connecté", assigned_slot),
