@@ -457,14 +457,12 @@ impl ViewerApp {
         let requested_kbps = args.bitrate_kbps;
 
         thread::spawn(move || {
-            let clean_host = host
-                .split(':')
-                .next()
-                .unwrap_or(&host)
-                .trim()
-                .to_string();
+            // The host may be an IPv4 literal, a bare IPv6 literal or an already
+            // bracketed IPv6 endpoint. format_endpoint keeps both cases valid.
+            let primary = stream_settings::format_endpoint(&host, port);
             let candidates = vec![
-                format!("{}:{}", clean_host, port),
+                primary,
+                format!("[fe80::1]:{}", port),
                 format!("10.244.0.1:{}", port),
                 format!("127.0.0.1:{}", port),
             ];

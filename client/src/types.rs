@@ -70,6 +70,12 @@ pub struct AppState {
     pub upnp_enabled: bool,
     pub upnp_status_text: String,
     pub public_ip: Option<Ipv4Addr>,
+    /// Adresse complète à communiquer à l'invité (IPv4, ou IPv6 si l'IPv4 est mutualisée).
+    pub share_endpoint: String,
+    /// Explication lisible du mode de connexion retenu.
+    pub reachability_label: String,
+    /// True when the session goes through IPv6.
+    pub reachability_ipv6: bool,
     pub unique_instance_id: String,
     pub central_server_connected: bool,
     pub cached_interfaces: Vec<crate::platform::InterfaceMetricInfo>,
@@ -96,6 +102,9 @@ impl Default for AppState {
             upnp_enabled: true,
             upnp_status_text: "En attente".to_string(),
             public_ip: None,
+            share_endpoint: String::new(),
+            reachability_label: String::new(),
+            reachability_ipv6: false,
             unique_instance_id: "Attribution...".to_string(),
             central_server_connected: false,
             cached_interfaces: Vec::new(),

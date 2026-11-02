@@ -1459,15 +1459,29 @@ fn main() {
     }
 
     // ---- stream listener -------------------------------------------------
-    let addr = format!("0.0.0.0:{}", settings.stream_port);
-    let listener = match TcpListener::bind(&addr) {
-        Ok(l) => l,
-        Err(e) => {
-            error!("Impossible d'écouter sur {} : {}", addr, e);
-            return;
+    // Dual-stack first: on Windows a socket bound to [::] accepts IPv4 and IPv6, which is
+    // what makes the IPv6 fallback work for hosts behind a shared (CGNAT) IPv4.
+    let v6_addr = format!("[::]:{}", settings.stream_port);
+    let v4_addr = format!("0.0.0.0:{}", settings.stream_port);
+    let listener = match TcpListener::bind(&v6_addr) {
+        Ok(l) => {
+            info!(
+                "Diffusion CoopLink en écoute sur {} (TCP, IPv4 + IPv6)",
+                v6_addr
+            );
+            l
         }
+        Err(e6) => match TcpListener::bind(&v4_addr) {
+            Ok(l) => {
+                info!("Diffusion CoopLink en écoute sur {} (TCP, IPv4 seul : {})", v4_addr, e6);
+                l
+            }
+            Err(e) => {
+                error!("Impossible d'écouter sur {} ni sur {} : {}", v6_addr, v4_addr, e);
+                return;
+            }
+        },
     };
-    info!("Diffusion CoopLink en écoute sur {} (TCP)", addr);
 
     for incoming in listener.incoming() {
         match incoming {

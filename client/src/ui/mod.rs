@@ -8,6 +8,7 @@ use crate::i18n::{I18n, Language};
 use crate::network::broadcast_relay::BroadcastRelay;
 use crate::network::telemetry::CentralTelemetryClient;
 use crate::network::tunnel::NetworkTunnel;
+use crate::network::reachability::{self, Reachability, ReachabilityReport};
 use crate::network::upnp::{UpnpManager, UpnpState};
 use crate::platform::{
     check_os_firewall_status, get_os_network_interfaces, set_os_adapter_metric,
@@ -71,6 +72,7 @@ pub struct CoopLinkApp {
     pub logo_texture: Option<TextureHandle>,
     pub interfaces_rx: Option<crossbeam_channel::Receiver<Vec<InterfaceMetricInfo>>>,
     pub public_ip_rx: Option<crossbeam_channel::Receiver<Ipv4Addr>>,
+    pub reachability_rx: Option<crossbeam_channel::Receiver<ReachabilityReport>>,
     pub show_close_prompt_modal: bool,
     pub remember_close_choice: bool,
     pub show_welcome_tutorial: bool,
@@ -116,6 +118,13 @@ impl CoopLinkApp {
         state.firewall_ok = check_os_firewall_status();
         let logo_texture = load_embedded_logo(&cc.egui_ctx);
 
+        // Détection de joignabilité : IPv4 directe, IPv4 mutualisée (CGNAT) ou repli IPv6.
+        let (reach_tx, reach_rx) = crossbeam_channel::bounded(1);
+        std::thread::spawn(move || {
+            let report = reachability::detect(None, false);
+            let _ = reach_tx.send(report);
+        });
+
         let (public_ip_tx, public_ip_rx) = crossbeam_channel::bounded(1);
         std::thread::spawn(move || {
             if let Some(ip) = crate::network::public_ip::fetch_public_ip_sync() {
@@ -146,6 +155,7 @@ impl CoopLinkApp {
             logo_texture,
             interfaces_rx: None,
             public_ip_rx: Some(public_ip_rx),
+            reachability_rx: Some(reach_rx),
             show_close_prompt_modal: false,
             remember_close_choice: true,
             show_welcome_tutorial: first_tutorial_needed,
@@ -733,6 +743,22 @@ impl eframe::App for CoopLinkApp {
             }
         }
 
+        if let Some(ref rx) = self.reachability_rx {
+            if let Ok(report) = rx.try_recv() {
+                let port = crate::streaming::settings::DEFAULT_STREAM_PORT;
+                self.state.share_endpoint = report.endpoint(port);
+                self.state.reachability_label = report.summary();
+                self.state.reachability_ipv6 = report.uses_ipv6();
+                if report.uses_ipv6() {
+                    self.add_log(
+                        LogLevel::Info,
+                        "IPv4 non joignable depuis Internet : la session utilisera automatiquement l'IPv6.",
+                    );
+                }
+                self.reachability_rx = None;
+            }
+        }
+
         let upnp_state = self.upnp_mgr.lock().state().clone();
         match upnp_state {
             UpnpState::Active {
@@ -741,6 +767,25 @@ impl eframe::App for CoopLinkApp {
                 ..
             } => {
                 let was_not_active = !self.state.upnp_status_text.starts_with("Actif");
+                let cgnat = self
+                    .state
+                    .public_ip
+                    .map(|seen| seen != external_ip)
+                    .unwrap_or(false)
+                    || reachability::is_cgnat(external_ip)
+                    || reachability::is_private_v4(external_ip);
+                if cgnat {
+                    // Redirection inutile : on garde l'IPv6 comme adresse de partage.
+                    if let Some(v6) = reachability::first_global_ipv6() {
+                        self.state.share_endpoint = format!(
+                            "[{}]:{}",
+                            v6,
+                            crate::streaming::settings::DEFAULT_STREAM_PORT
+                        );
+                        self.state.reachability_ipv6 = true;
+                        self.state.reachability_label = Reachability::SharedV4.summary_for(Some(v6));
+                    }
+                }
                 self.state.public_ip = Some(external_ip);
                 self.state.upnp_status_text = format!("Actif (UDP {})", mapped_port);
                 if was_not_active {

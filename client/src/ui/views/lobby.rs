@@ -273,12 +273,25 @@ fn render_connection_dashboard(
                 let full_addr = format!("{}:{}", pub_ip, config.listen_port);
                 ui.label(RichText::new("🌐 Votre IP Publique (Internet) :").color(ModernTheme::BLUE_ELECTRIC).strong().size(13.0));
                 ui.label(RichText::new(&full_addr).color(ModernTheme::TEXT_PRIMARY).strong().size(13.0));
-                if state.public_ip.is_some() {
+                if state.public_ip.is_some() || !state.share_endpoint.is_empty() {
                     if ui.button("📋 Copier mon IP et Port").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                         ui.output_mut(|o| o.copied_text = full_addr);
                     }
                 }
             });
+
+            if !state.reachability_label.is_empty() {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(&state.reachability_label)
+                        .color(if state.reachability_ipv6 {
+                            ModernTheme::ORANGE_CORAL
+                        } else {
+                            ModernTheme::GREEN_VIVID
+                        })
+                        .size(12.0),
+                );
+            }
 
             ui.add_space(8.0);
             ui.label(
@@ -577,11 +590,15 @@ fn render_active_session(
                     .rounding(Rounding::same(8.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            let public_addr = format!(
-                                "{}:{}",
-                                state.public_ip.map(|ip| ip.to_string()).unwrap_or_else(|| "IP_PUBLIQUE".to_string()),
-                                config.listen_port
-                            );
+                            let public_addr = if state.share_endpoint.is_empty() {
+                                format!(
+                                    "{}:{}",
+                                    state.public_ip.map(|ip| ip.to_string()).unwrap_or_else(|| "IP_PUBLIQUE".to_string()),
+                                    config.listen_port
+                                )
+                            } else {
+                                state.share_endpoint.clone()
+                            };
                             ui.label(
                                 RichText::new(match lang {
                                     Language::Fr => format!("Adresse directe P2P :  {}", public_addr),

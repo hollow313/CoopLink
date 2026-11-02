@@ -253,6 +253,25 @@ impl StreamStats {
     }
 }
 
+/// `hôte:port`, en acceptant les littéraux IPv6 nus ou déjà crochetés.
+pub fn format_endpoint(host: &str, port: u16) -> String {
+    let trimmed = host.trim();
+    if trimmed.starts_with('[') {
+        return if trimmed.contains("]:") {
+            trimmed.to_string()
+        } else {
+            format!("{}:{}", trimmed, port)
+        };
+    }
+    if trimmed.matches(':').count() >= 2 {
+        format!("[{}]:{}", trimmed, port)
+    } else if trimmed.contains(':') {
+        trimmed.to_string()
+    } else {
+        format!("{}:{}", trimmed, port)
+    }
+}
+
 pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
