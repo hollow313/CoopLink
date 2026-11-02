@@ -18,7 +18,7 @@ use eframe::egui::{
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -560,7 +560,16 @@ impl ViewerApp {
             while running_conn.load(Ordering::Relaxed) {
                 let mut connected = None;
                 for (candidate, is_relay) in &candidates {
-                    if let Ok(addr) = candidate.parse::<SocketAddr>() {
+                    // Un nom d'hôte (ex. hub DNS comme « cooplink.example.tld:47510 ») n'est
+                    // pas un SocketAddr : sans résolution, le repli relais était ignoré en
+                    // silence et l'invité restait sur « hôte injoignable ».
+                    let resolved = candidate.parse::<SocketAddr>().ok().or_else(|| {
+                        candidate
+                            .to_socket_addrs()
+                            .ok()
+                            .and_then(|mut it| it.next())
+                    });
+                    if let Some(addr) = resolved {
                         if let Ok(mut s) =
                             TcpStream::connect_timeout(&addr, Duration::from_millis(1200))
                         {

@@ -22,7 +22,7 @@ use egui::{Color32, CursorIcon, RichText, Rounding, TextureHandle};
 use logo::load_embedded_logo;
 use parking_lot::Mutex;
 use retro_theme::ModernTheme;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -1345,13 +1345,22 @@ impl CoopLinkApp {
 
         let mut server_addr: SocketAddr = match server_str.parse() {
             Ok(addr) => addr,
-            Err(_) => match format!("{}:{}", server_str, self.config.listen_port).parse() {
-                Ok(addr) => addr,
-                Err(e) => {
-                    self.add_log(LogLevel::Error, &format!("Adresse invalide: {}", e));
-                    return;
+            Err(_) => {
+                // Nom d'hôte ou IPv6 nue : on formate puis on résout, sinon une adresse
+                // comme « 2a01:cb00::1 » ou « hub.exemple.tld » était refusée d'emblée.
+                let candidate =
+                    reachability::format_endpoint(&server_str, self.config.listen_port);
+                match candidate.to_socket_addrs().ok().and_then(|mut it| it.next()) {
+                    Some(addr) => addr,
+                    None => {
+                        self.add_log(
+                            LogLevel::Error,
+                            &format!("Adresse invalide ou introuvable: {}", server_str),
+                        );
+                        return;
+                    }
                 }
-            },
+            }
         };
 
         // Les adresses partagées par les versions précédentes portaient le port du flux
