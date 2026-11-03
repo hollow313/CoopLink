@@ -14,11 +14,11 @@ services:
       # HTTP interne (reverse proxy https://cooplink.home-lh.ovh -> 30024)
       - "30024:30024/tcp"
       # Port TCP Web (Interface d'administration et monitoring en direct)
-      - "30025:30025/tcp"
+      - "30026:30026/tcp"
     environment:
       - PORT_UDP=30024
       - PORT_RELAY=47510
-      - PORT_WEB=30025
+      - PORT_WEB=30026
       - DATA_DIR=/data
       - SERVER_NAME=CoopLink Official Hub #1
       - RUST_LOG=info

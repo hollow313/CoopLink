@@ -46,7 +46,7 @@ pub async fn start_web_server(hub: Arc<ServerHub>, config: ServerConfig) {
         }
     });
 
-    // 2. Écoute HTTP secondaire sur le port 30025 (TCP)
+    // 2. Écoute HTTP secondaire sur le port 30026 (TCP)
     if web_port != udp_port {
         let bind_secondary = format!("0.0.0.0:{}", web_port);
         if let Ok(listener) = tokio::net::TcpListener::bind(&bind_secondary).await {

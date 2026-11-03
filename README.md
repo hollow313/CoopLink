@@ -47,8 +47,8 @@ CoopLink intègre son propre moteur d'orchestration de capture vidéo matériell
 
 - **Aucun trafic de jeu ni flux vidéo ne transite par le serveur central** pendant vos sessions.
 - Le container Hub (`server/`) :
-  - Attribue un **ID Unique d'instance (`CL-1001`, `CL-1002`...)** à chaque logiciel CoopLink lancé (`30024/udp` et `/api/telemetry` sur `30025/tcp`).
-  - Expose une **Plateforme Web Moderne de Métriques** sur le port `30025/tcp` (Instances actives, Tunnels P2P montés actifs et cumulés, Sessions de partage de jeu actives, IDs uniques attribués).
+  - Attribue un **ID Unique d'instance (`CL-1001`, `CL-1002`...)** à chaque logiciel CoopLink lancé (`30024/udp` et `/api/telemetry` sur `30026/tcp`).
+  - Expose une **Plateforme Web Moderne de Métriques** sur le port `30026/tcp` (Instances actives, Tunnels P2P montés actifs et cumulés, Sessions de partage de jeu actives, IDs uniques attribués).
 
 ---
 

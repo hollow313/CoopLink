@@ -8,6 +8,12 @@
 # Dependencies sources & vendor
 /sources/
 
+# Artefacts de build
+/dist/
+
+# Encodeur vidéo téléchargé (100 Mo, non versionné — voir installer/BUILD.md)
+/installer/redist/ffmpeg.exe
+
 # OS specific files
 Thumbs.db
 Desktop.ini

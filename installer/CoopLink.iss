@@ -28,7 +28,9 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64
-ArchitecturesAllowed=x64compatible
+ArchitecturesAllowed=x64
+SetupIconFile=..\images\icon.ico
+UninstallDisplayIcon={app}\{#MyAppExeName}
 MinVersion=10.0.17763
 
 [Languages]

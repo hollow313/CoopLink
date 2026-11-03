@@ -79,4 +79,70 @@ Sans signature, SmartScreen affichera un avertissement sur un exécutable qui in
 ## 6. Déploiement du hub (relais)
 
 Le relais TCP écoute sur `PORT_RELAY` (47510 par défaut). Côté Docker, `docker-compose.yml`
-publie `47510:47510`, `30024:30024/udp`, `30024:30024/tcp` et `30025:30025/tcp`.
+publie `47510:47510`, `30024:30024/udp`, `30024:30024/tcp` et `30026:30026/tcp`.
+
+## 7. Compilation croisée depuis Linux (sans MSVC, sans Windows)
+
+Validée sur Debian 13 x86_64 en compte non-root. Produit les mêmes binaires que la
+chaîne MSVC (cible `x86_64-pc-windows-gnu`, CRT UCRT, imports identiques).
+
+Prérequis, en espace utilisateur :
+
+```bash
+# 1. Rust + cible Windows
+curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+export PATH="$HOME/.cargo/bin:$PATH"
+rustup target add x86_64-pc-windows-gnu
+
+# 2. Chaîne mingw : llvm-mingw (ucrt) — fournit gcc/lld, ar, windres
+curl -LO https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64.tar.xz
+tar -xf llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64.tar.xz
+```
+
+**Piège n°1 — `-lgcc` / `-lgcc_eh`** : rustc les ajoute pour la cible gnu, llvm-mingw ne
+les fournit pas (il utilise compiler-rt). Créer un shim :
+
+```bash
+mkdir -p gcclibs
+cp llvm-mingw-*/lib/clang/*/lib/windows/libclang_rt.builtins-x86_64.a gcclibs/libgcc.a
+cp llvm-mingw-*/x86_64-w64-mingw32/lib/libunwind.a                        gcclibs/libgcc_eh.a
+```
+
+**Piège n°2 — `client/build.rs` embarque les binaires** depuis `../target/release/`, pas
+depuis `target/<triple>/release/`. L'ordre est donc impératif, sinon `cooplink.exe` part
+avec des charges vides et n'extrait ni viewer ni service de capture :
+
+```bash
+export PATH="$PWD/llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64/bin:$PATH"
+export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS="-L native=$PWD/gcclibs"
+T=target/x86_64-pc-windows-gnu/release
+
+cargo build --release --target x86_64-pc-windows-gnu -p cooplink \
+  --bin cooplink-viewer --bin cooplink-capture-service
+cargo build --release --target x86_64-pc-windows-gnu -p cooplink-test-game
+mkdir -p target/release
+cp $T/cooplink-{viewer,capture-service,test-game}.exe target/release/
+
+cargo build --release --target x86_64-pc-windows-gnu -p cooplink --bin cooplink
+cp $T/cooplink.exe target/release/
+
+cargo build --release --target x86_64-pc-windows-gnu -p cooplink --bin cooplink-setup
+```
+
+**Piège n°3 — Inno Setup sous Wine** : `innosetup-6.7.4.exe` refuse de s'installer en
+mode silencieux sous Wine (`Invalid window handle`, pas de serveur X). Utiliser
+**6.0.5**, décompressable avec `innoextract 1.9`, puis lancer `ISCC.exe` (console, sans
+affichage) :
+
+```bash
+innoextract -d innosetup innosetup-6.0.5.exe
+WINEPREFIX=~/.wine-cooplink wine innosetup/app/ISCC.exe 'Z:\chemin\vers\installer\CoopLink.iss'
+```
+
+Contrainte de version : `ArchitecturesAllowed=x64compatible` n'existe qu'à partir de 6.3,
+le script utilise donc `x64` (compatible 6.0.5 → 6.7).
+
+**Piège n°4 — ffmpeg** : `ffmpeg.exe` doit être présent dans `installer/redist/` AVANT la
+compilation Inno (sinon `skipifsourcedoesntexist` l'omet silencieusement et le partage
+retombe en JPEG). Build « essentials » de gyan.dev, ~100 Mo, non versionné.

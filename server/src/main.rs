@@ -41,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Lancement du Serveur Web d'Administration (port 30025 par défaut)
+    // Lancement du Serveur Web d'Administration (port 30026 par défaut)
     let hub_for_web = hub.clone();
     let config_for_web = config.clone();
     tokio::spawn(async move {

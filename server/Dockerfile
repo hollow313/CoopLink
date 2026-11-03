@@ -1,7 +1,7 @@
 # ------------------------------------------------------------------------------
 # CoopLink Server - Production Dockerfile (Alpine Linux)
 # User: 568 (Non-root security)
-# Ports: 30024/udp (Gaming Tunnel Relay), 30025/tcp (Web Admin Dashboard)
+# Ports: 30024/udp (Gaming Tunnel Relay), 30026/tcp (Web Admin Dashboard)
 # ------------------------------------------------------------------------------
 
 # --- Étape 1 : Build du binaire Rust statique ---
@@ -40,16 +40,16 @@ COPY --from=builder --chown=568:568 /build/target/release/cooplink-server /usr/l
 USER 568:568
 
 ENV PORT_UDP=30024 \
-    PORT_WEB=30025 \
+    PORT_WEB=30026 \
     PORT_RELAY=47510 \
     DATA_DIR=/data \
     SERVER_NAME="CoopLink Master Hub" \
     RUST_LOG=info
 
-# Exposition des ports : 30024/udp (Tunnel P2P), 30024/tcp & 30025/tcp (Web Hub & Reverse Proxy)
+# Exposition des ports : 30024/udp (Tunnel P2P), 30024/tcp & 30026/tcp (Web Hub & Reverse Proxy)
 EXPOSE 30024/udp
 EXPOSE 30024/tcp
-EXPOSE 30025/tcp
+EXPOSE 30026/tcp
 EXPOSE 47510/tcp
 
 VOLUME ["/data"]
