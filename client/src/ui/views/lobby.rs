@@ -34,7 +34,7 @@ impl LobbyView {
                         render_connection_dashboard(ui, lang, state, config, on_host_clicked, on_join_clicked);
                     }
                     ConnectionStatus::Connecting => {
-                        render_connecting_screen(ui, lang);
+                        render_connecting_screen(ui, lang, on_disconnect_clicked);
                     }
                     ConnectionStatus::Connected | ConnectionStatus::Hosting => {
                         render_active_session(ui, lang, state, config, on_disconnect_clicked);
@@ -450,7 +450,7 @@ fn render_connection_dashboard(
     });
 }
 
-fn render_connecting_screen(ui: &mut Ui, lang: Language) {
+fn render_connecting_screen(ui: &mut Ui, lang: Language, on_cancel_clicked: &mut bool) {
     egui::Frame::none()
         .fill(ModernTheme::CARD_BG)
         .stroke(Stroke::new(1.0_f32, ModernTheme::BORDER_SUBTLE))
@@ -471,6 +471,26 @@ fn render_connecting_screen(ui: &mut Ui, lang: Language) {
                     .color(ModernTheme::BLUE_ELECTRIC)
                     .strong(),
                 );
+                ui.add_space(14.0);
+                // Sans ce bouton, une tentative qui n'aboutit pas obligeait à tuer le
+                // processus : la fenêtre restait bloquée sur l'attente.
+                let cancel = egui::Button::new(
+                    RichText::new(match lang {
+                        Language::Fr => "Annuler la connexion",
+                        Language::En => "Cancel connection",
+                        Language::Es => "Cancelar la conexión",
+                        Language::De => "Verbindung abbrechen",
+                        Language::Pt => "Cancelar a ligação",
+                    })
+                    .color(Color32::WHITE)
+                    .strong(),
+                )
+                .fill(ModernTheme::RED_ERROR)
+                .rounding(Rounding::same(8.0))
+                .min_size(egui::vec2(160.0, 32.0));
+                if ui.add(cancel).clicked() {
+                    *on_cancel_clicked = true;
+                }
             });
         });
 }
