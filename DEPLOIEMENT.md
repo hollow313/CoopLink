@@ -8,7 +8,7 @@
 | `build/` | Binaires Windows non empaquetés, pour test rapide |
 | `installer/redist/ffmpeg.exe` | Encodeur H.264 embarqué par l'installateur |
 
-SHA-256 de l'installateur : `15d66cc5aef91ca77449ad6687ca5f518158672c28f487cd3e0a9f9256780abc`
+SHA-256 de l'installateur : `d0687121e42e31073cac3906b7e9779128e6351c23bff5335506fc02892848b7`
 
 ## Installer sur un poste
 
@@ -41,9 +41,21 @@ curl -s http://127.0.0.1:30026/api/stats
 Attendu : hub sur `30024` (UDP + TCP), web admin sur `30026`, relais `47510`.
 NAT sur la box : UDP 30024 et TCP 47510 → NAS.
 
+## Jeu en réseau local (coop LAN)
+
+CoopLink crée une **vraie** interface réseau Windows nommée `CoopLink` via le pilote
+Wintun (signé WHQL), en 10.244.0.1 (hôte) / 10.244.0.2 (invité), MTU 1420.
+Les jeux voient donc un LAN normal : découverte par broadcast, partie hébergée en LAN.
+
+- L'interface doit apparaître dans `ncpa.cpl` ou `Get-NetAdapter` après « Héberger » /
+  « Rejoindre ». Le journal affiche « Réseau local virtuel actif : interface CoopLink en … ».
+- `wintun.dll` doit être à côté de `cooplink.exe` (l'installateur le fait).
+- CoopLink demande l'élévation administrateur : sans elle, pas d'interface virtuelle.
+- Si le journal affiche « Réseau local virtuel indisponible », le partage vidéo reste
+  fonctionnel mais les jeux ne se verront pas.
+
 ## Limites connues
 
-- Pas de carte réseau virtuelle : la découverte LAN des jeux est relayée par broadcast
-  (6112, 27015, 7777, 19132, 25565…), mais un jeu qui rappelle une IP LAN échouera.
 - Seule la fenêtre au premier plan est diffusée.
 - Le chemin direct dépend de l'UPnP (UDP 42422 + TCP 47500) ; sinon repli relais.
+- Certains jeux en IPv6 uniquement ne passent pas par le réseau virtuel (IPv4 seul).

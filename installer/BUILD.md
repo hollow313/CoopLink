@@ -146,3 +146,27 @@ le script utilise donc `x64` (compatible 6.0.5 → 6.7).
 **Piège n°4 — ffmpeg** : `ffmpeg.exe` doit être présent dans `installer/redist/` AVANT la
 compilation Inno (sinon `skipifsourcedoesntexist` l'omet silencieusement et le partage
 retombe en JPEG). Build « essentials » de gyan.dev, ~100 Mo, non versionné.
+
+## 8. Ressources Windows (icône, version, manifeste)
+
+Les binaires compilés en croisé n'ont ni icône ni métadonnées : `winres` ne s'exécute que
+sur Windows. On les ajoute avec `windres` (fourni par llvm-mingw) :
+
+```bash
+R=installer/resources
+x86_64-w64-mingw32-windres -I images -i $R/cooplink.rc   -o $R/cooplink_res.o
+x86_64-w64-mingw32-windres -I images -i $R/companion.rc  -o $R/companion_res.o
+# puis, par binaire :
+#   cooplink.exe / cooplink-setup.exe -> -C link-arg=$R/cooplink_res.o   (manifeste admin)
+#   viewer / capture / test-game      -> -C link-arg=$R/companion_res.o  (icône + version)
+```
+
+`cooplink.rc` embarque `cooplink.manifest` (`requireAdministrator`, DPI per-monitor) :
+indispensable pour créer l'adaptateur Wintun et poser les règles de pare-feu.
+`companion.rc` est le même fichier sans la ligne du manifeste, pour éviter une demande
+d'élévation séparée quand le viewer est lancé par un parent déjà élevé.
+
+`installer/redist/wintun.dll` (amd64, WireGuard LLC) est livré par l'installateur à côté
+de `cooplink.exe` : c'est le pilote du réseau local virtuel. Sa licence
+(`WINTUN-LICENSE.txt`) autorise la redistribution aux côtés d'un logiciel qui n'utilise
+que son API publique.

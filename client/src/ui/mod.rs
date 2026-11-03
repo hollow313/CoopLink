@@ -690,13 +690,23 @@ impl eframe::App for CoopLinkApp {
                     let adapter_name = self.state.adapter_name.clone();
                     let metric = self.config.target_metric;
                     let mtu = self.config.mtu;
-                    let _ = self.adapter.initialize(
+                    let lan = self.adapter.initialize(
                         &adapter_name,
                         vip,
                         Ipv4Addr::new(255, 255, 255, 0),
                         metric,
                         mtu,
                     );
+                    match &lan {
+                        Ok(()) => self.add_log(
+                            LogLevel::Success,
+                            &format!("Réseau local virtuel actif : interface CoopLink en {} — les jeux en LAN se voient.", vip),
+                        ),
+                        Err(e) => self.add_log(
+                            LogLevel::Warning,
+                            &format!("Réseau local virtuel indisponible ({}). Le partage vidéo fonctionne, le jeu en LAN non.", e),
+                        ),
+                    }
                     self.add_log(
                         LogLevel::Success,
                         &format!(
@@ -1271,13 +1281,23 @@ impl CoopLinkApp {
         );
 
         let (mut adapter, to_adapter_tx, from_adapter) = NativeAdapter::new();
-        let _ = adapter.initialize(
+        let lan = adapter.initialize(
             &self.state.adapter_name,
             host_ip,
             Ipv4Addr::new(255, 255, 255, 0),
             self.config.target_metric,
             self.config.mtu,
         );
+        match &lan {
+            Ok(()) => self.add_log(
+                LogLevel::Success,
+                &format!("Réseau local virtuel actif : interface CoopLink en {} — les jeux en LAN se voient.", host_ip),
+            ),
+            Err(e) => self.add_log(
+                LogLevel::Warning,
+                &format!("Réseau local virtuel indisponible ({}). Le partage vidéo fonctionne, le jeu en LAN non.", e),
+            ),
+        }
         let (to_bcast_tx, from_bcast_net) = mpsc::channel(1000);
         let (to_tunnel_bcast_tx, from_bcast) = mpsc::channel(1000);
         self.adapter = adapter;

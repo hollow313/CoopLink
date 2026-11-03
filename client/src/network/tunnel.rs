@@ -305,8 +305,31 @@ impl NetworkTunnel {
                                     continue;
                                 }
 
+                                let is_lan_diffusion = dst_ip == Ipv4Addr::BROADCAST
+                                    || dst_ip.octets()[3] == 255
+                                    || (224..=239).contains(&dst_ip.octets()[0]);
+
                                 if dst_ip == host_virtual_ip {
                                     let _ = to_adapter_tx.send(payload).await;
+                                } else if is_lan_diffusion {
+                                    // Diffusion / multicast d'un invité : l'hôte la remet à
+                                    // son propre adaptateur et à tous les autres invités.
+                                    let _ = to_adapter_tx.send(payload.clone()).await;
+                                    let targets: Vec<SocketAddr> = peers_map
+                                        .read()
+                                        .values()
+                                        .filter(|p| p.virtual_ip != src_ip)
+                                        .map(|p| p.endpoint)
+                                        .collect();
+                                    let fwd = CoopPacket::TunnelData {
+                                        src_ip,
+                                        dst_ip,
+                                        payload,
+                                    }
+                                    .encode_encrypted(&session_key);
+                                    for ep in targets {
+                                        let _ = socket_rx.send_to(&fwd, ep).await;
+                                    }
                                 } else {
                                     let target_ep = {
                                         let ip_m = ip_map.read();
@@ -404,7 +427,10 @@ impl NetworkTunnel {
                 if let Some(data) = from_adapter_rx.recv().await {
                     if data.len() >= 20 {
                         let dst_ip = Ipv4Addr::new(data[16], data[17], data[18], data[19]);
-                        if dst_ip == Ipv4Addr::BROADCAST || dst_ip.octets()[3] == 255 {
+                        // Diffusion et multicast (224.0.0.0/4 : découverte de jeux type
+                        // Minecraft 224.0.2.60) partent vers tous les pairs.
+                        let is_multicast = (224..=239).contains(&dst_ip.octets()[0]);
+                        if dst_ip == Ipv4Addr::BROADCAST || dst_ip.octets()[3] == 255 || is_multicast {
                             let bcast_pkt = CoopPacket::BroadcastGaming {
                                 src_ip: my_vip,
                                 port: 0,

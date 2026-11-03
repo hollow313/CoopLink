@@ -112,6 +112,9 @@ fn is_virtual_display_name(name: &str) -> bool {
 const VIGEM_INSTALLER: &[u8] =
     include_bytes!("../../../installer/redist/ViGEmBus_1.22.0_x64_x86_arm64.exe");
 
+/// Pilote réseau virtuel (Wintun, WireGuard LLC) : indispensable au jeu en LAN.
+const WINTUN_DLL: &[u8] = include_bytes!("../../../installer/redist/wintun.dll");
+
 /// Vrai si le service ViGEmBus est enregistré sur la machine.
 pub fn vigembus_installed() -> bool {
     run_hidden_powershell_output(
@@ -379,6 +382,12 @@ pub fn populate_complete_software_tree(
             let _ = fs::copy(&src, &test_dest);
         } else if EMBEDDED_TEST_GAME_BIN.len() > 10_000 {
             let _ = fs::write(&test_dest, EMBEDDED_TEST_GAME_BIN);
+        }
+
+        // 4. wintun.dll (réseau local virtuel)
+        let wintun_dest = base.join("wintun.dll");
+        if !wintun_dest.exists() {
+            let _ = fs::write(&wintun_dest, WINTUN_DLL);
         }
 
         // Descripteurs de modules JSON

@@ -48,6 +48,8 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: isreadme
 Source: "..\LICENSE.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "redist\ViGEmBus_1.22.0_x64_x86_arm64.exe"; DestDir: "{app}\redist"; Flags: ignoreversion
 Source: "redist\ffmpeg.exe"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "redist\wintun.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "redist\WINTUN-LICENSE.txt"; DestDir: "{app}\redist"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

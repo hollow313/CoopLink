@@ -96,7 +96,7 @@ impl Default for AppState {
             total_bytes_tx: 0,
             total_bytes_rx: 0,
             broadcast_packets_relayed: 0,
-            adapter_name: "CoopLink Virtual Adapter".to_string(),
+            adapter_name: "CoopLink".to_string(),
             adapter_status: "Prêt / En attente".to_string(),
             upnp_enabled: true,
             upnp_status_text: "En attente".to_string(),
