@@ -10,6 +10,7 @@
 
 # Artefacts de build
 /dist/
+/build/
 
 # Encodeur vidéo téléchargé (100 Mo, non versionné — voir installer/BUILD.md)
 /installer/redist/ffmpeg.exe
