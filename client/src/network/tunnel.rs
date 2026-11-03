@@ -745,9 +745,17 @@ impl NetworkTunnel {
                                         serde_json::from_str::<HashMap<u64, PeerInfo>>(&raw_json)
                                     {
                                         let current_ping = peers_map.read().values().find(|p| p.is_host).map(|p| p.ping_ms).unwrap_or(15);
+                                        let locked_host_ep = *host_ep_rx.read();
                                         for p in updated_peers.values_mut() {
                                             if p.is_host && current_ping > 0 {
                                                 p.ping_ms = current_ping;
+                                            }
+                                            // L'hôte s'annonce avec son adresse d'écoute (joker
+                                            // [::]:port) : sans correction, l'interface croyait
+                                            // l'hôte joignable en « :: » et la session de jeu
+                                            // visait une adresse inutilisable.
+                                            if p.is_host && p.endpoint.ip().is_unspecified() {
+                                                p.endpoint = locked_host_ep;
                                             }
                                         }
                                         *peers_map.write() = updated_peers;

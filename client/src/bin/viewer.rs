@@ -559,6 +559,7 @@ impl ViewerApp {
 
             while running_conn.load(Ordering::Relaxed) {
                 let mut connected = None;
+                let mut tried: Vec<String> = Vec::new();
                 for (candidate, is_relay) in &candidates {
                     // Un nom d'hôte (ex. hub DNS comme « cooplink.example.tld:47510 ») n'est
                     // pas un SocketAddr : sans résolution, le repli relais était ignoré en
@@ -568,6 +569,11 @@ impl ViewerApp {
                             .to_socket_addrs()
                             .ok()
                             .and_then(|mut it| it.next())
+                    });
+                    tried.push(if *is_relay {
+                        format!("{} (relais)", candidate)
+                    } else {
+                        candidate.clone()
                     });
                     if let Some(addr) = resolved {
                         if let Ok(mut s) =
@@ -586,7 +592,11 @@ impl ViewerApp {
                 }
 
                 let Some((mut stream, addr)) = connected else {
-                    state_stream.lock().status = "hôte injoignable".to_string();
+                    // Afficher les cibles réellement tentées : sans cela, « hôte
+                    // injoignable » ne dit pas si l'échec vient du direct, du LAN virtuel
+                    // ou du relais.
+                    state_stream.lock().status =
+                        format!("hôte injoignable — essayé : {}", tried.join(" / "));
                     thread::sleep(Duration::from_millis(1000));
                     continue;
                 };

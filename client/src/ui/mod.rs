@@ -760,9 +760,15 @@ impl eframe::App for CoopLinkApp {
                 self.state.reachability_label = report.summary();
                 self.state.reachability_ipv6 = report.uses_ipv6();
                 if report.uses_ipv6() {
+                    // Ne pas affirmer que l'IPv4 est injoignable : l'absence d'UPnP suffit à
+                    // faire basculer sur IPv6, alors que l'IPv4 est souvent publique et
+                    // utilisable avec une simple redirection manuelle du port du tunnel.
                     self.add_log(
                         LogLevel::Info,
-                        "IPv4 non joignable depuis Internet : la session utilisera automatiquement l'IPv6.",
+                        &format!(
+                            "Session exposée en IPv6 en priorité. Si votre IPv4 est publique, ouvrez UDP {} sur la box pour que l'invité puisse aussi passer par IPv4.",
+                            port
+                        ),
                     );
                 }
                 self.reachability_rx = None;
@@ -815,10 +821,22 @@ impl eframe::App for CoopLinkApp {
                 let was_not_failed = !self.state.upnp_status_text.starts_with("Échec");
                 self.state.upnp_status_text = format!("Échec ({})", reason);
                 if was_not_failed {
-                    self.add_log(
-                        LogLevel::Warning,
-                        &format!("Information UPnP IGD: {}", reason),
-                    );
+                    if self.state.role == NodeRole::Host {
+                        // Le message brut « No response within timeout » ne dit pas la
+                        // conséquence : sans ouverture, le salon est injoignable.
+                        self.add_log(
+                            LogLevel::Warning,
+                            &format!(
+                                "Redirection automatique impossible ({}). Ouvrez UDP {} sur la box (ou activez l'UPnP), sinon aucun invité ne pourra rejoindre ce salon.",
+                                reason, self.config.listen_port
+                            ),
+                        );
+                    } else {
+                        self.add_log(
+                            LogLevel::Warning,
+                            &format!("Information UPnP IGD: {}", reason),
+                        );
+                    }
                 }
             }
             UpnpState::Disabled => {
@@ -1153,15 +1171,28 @@ impl eframe::App for CoopLinkApp {
                         Ipv4Addr::new(10, 244, 0, 2)
                     });
 
-                    // Cible en priorité l'adresse IP de l'hôte distant (IP publique ou LAN)
-                    let target_str = if let Some(peer) = self.state.peers.iter().find(|p| p.is_host) {
-                        peer.endpoint.ip().to_string()
-                    } else if let Some(peer) = self.state.peers.first() {
-                        peer.endpoint.ip().to_string()
-                    } else if let Ok(parsed) = self.config.remote_server_address.parse::<SocketAddr>() {
-                        parsed.ip().to_string()
-                    } else {
-                        self.config.remote_server_address.split(':').next().unwrap_or("10.244.0.1").to_string()
+                    // Cible : l'adresse réelle de l'hôte. Attention, l'hôte s'annonce dans sa
+                    // propre liste de pairs avec son adresse d'écoute (joker `[::]`) : sans
+                    // filtre, la session visait « :: » et échouait systématiquement.
+                    let real_host_ip = self
+                        .state
+                        .peers
+                        .iter()
+                        .filter(|p| p.is_host)
+                        .map(|p| p.endpoint.ip())
+                        .find(|ip| !ip.is_unspecified())
+                        .or_else(|| {
+                            self.state
+                                .peers
+                                .iter()
+                                .map(|p| p.endpoint.ip())
+                                .find(|ip| !ip.is_unspecified())
+                        });
+                    let target_str = match real_host_ip {
+                        Some(ip) => ip.to_string(),
+                        // Repli : l'IP virtuelle de l'hôte passe par le tunnel, donc elle
+                        // fonctionne même si son port 47500 est filtré depuis Internet.
+                        None => self.config.host_virtual_ip.to_string(),
                     };
                     let target_vip = self.config.host_virtual_ip;
 

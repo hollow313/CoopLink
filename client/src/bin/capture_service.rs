@@ -1032,6 +1032,7 @@ fn handle_client(
     target: Arc<Mutex<engine::CaptureTarget>>,
     auth_timeout: Duration,
     codec: Codec,
+    pad: Arc<Mutex<VirtualPad>>,
 ) {
     let peer = stream
         .peer_addr()
@@ -1156,7 +1157,10 @@ fn handle_client(
     }
 
     stats.clients.fetch_add(1, Ordering::Relaxed);
-    let mut pad = VirtualPad::open();
+    // La manette virtuelle est partagée par tout le service (créée au démarrage) : la
+    // brancher ici, par connexion, produisait un « appareil connecté/déconnecté » Windows
+    // en boucle dès que le viewer d'un invité se reconnectait.
+    let pad_input = pad.clone();
     // Bitrate the client asked for (it can lower it without renegotiating).
     let requested_kbps = Arc::new(AtomicU32::new(0));
 
@@ -1203,8 +1207,7 @@ fn handle_client(
                             engine::ensure_foreground(&guard);
                         } else if let Some(rest) = line.strip_prefix("G ") {
                             if let Some(state) = PadState::parse(rest) {
-                                // The pad lives in this thread, no lock needed.
-                                pad.update(state);
+                                pad_input.lock().update(state);
                             }
                         } else if let Some(rest) = line.strip_prefix("B ") {
                             if let Ok(kbps) = rest.trim().parse::<u32>() {
@@ -1395,6 +1398,8 @@ fn handle_client(
     }
 
     let _ = stream.flush();
+    // L'invité parti, la manette virtuelle revient au repos mais reste branchée.
+    pad.lock().neutralize();
     info!("Session de diffusion terminée pour {}", peer);
 }
 
@@ -1465,6 +1470,9 @@ fn main() {
     let audio = Arc::new(AudioBus::new());
     let stats = Arc::new(LiveStats::default());
     let target = Arc::new(Mutex::new(engine::resolve_target(&settings, None)));
+    // Une seule manette virtuelle pour toute la vie du service : elle est branchée au
+    // démarrage et débranchée à l'arrêt, plus à chaque connexion d'invité.
+    let pad = Arc::new(Mutex::new(VirtualPad::open()));
     let settings = Arc::new(settings);
 
     if settings.audio_enabled {
@@ -1699,6 +1707,7 @@ fn main() {
         let stats_r = stats.clone();
         let running_r = running.clone();
         let target_r = target.clone();
+        let pad_r = pad.clone();
         info!(
             "Relais actif : {} (salon {}) — repli si la connexion directe échoue.",
             relay_addr, relay_room
@@ -1731,6 +1740,7 @@ fn main() {
                             target_r.clone(),
                             Duration::from_secs(1800),
                             codec,
+                            pad_r.clone(),
                         );
                     }
                 }
@@ -1749,6 +1759,7 @@ fn main() {
                 let stats = stats.clone();
                 let running = running.clone();
                 let target = target.clone();
+                let pad_c = pad.clone();
                 thread::spawn(move || {
                     handle_client(
                         stream,
@@ -1760,6 +1771,7 @@ fn main() {
                         target,
                         Duration::from_secs(5),
                         codec,
+                        pad_c,
                     )
                 });
             }
